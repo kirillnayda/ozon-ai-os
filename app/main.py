@@ -1,155 +1,133 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import logging
-import httpx
+import os
+from pathlib import Path
 import signal
-import socket
 import sys
 
 from app.config import load_settings
-from app.database import init_database, log_event
-from app.ozon_client import OzonApiError, OzonClient
-from app.telegram_client import TelegramClient, TelegramError
+from app.core.logging import configure_logging
+from app.core.scheduler import Scheduler
+from app.core.security import WritePolicy
+from app.database import DB_PATH
+from app.developer_agent.report_builder import build_task_report
+from app.developer_agent.task_repository import SQLiteDeveloperTaskRepository
+from app.developer_agent.telegram_handlers import DeveloperAgentTelegramHandlers, task_keyboard
+from app.ozon.read_api import OzonReadApi
+from app.ozon.transport import OzonHttpTransport
+from app.storage.sqlite import SQLiteStorage
+from app.supply.service import SupplyManager
+from app.supplies.service import SupplyWorkflow
+from app.telegram.client import TelegramClient
+from app.telegram.handlers import CommandHandlers
+from app.updater.checker import GitHubReleaseChecker
+from app.updater.request import UpdateRequestWriter
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
 logger = logging.getLogger("ozon-ai-os")
 
 
-class OzonAiOs:
+class Application:
     def __init__(self) -> None:
         self.settings = load_settings()
+        self.storage = SQLiteStorage(DB_PATH)
         self.telegram = TelegramClient(self.settings.telegram_bot_token)
-        self.ozon = OzonClient(
-            self.settings.ozon_client_id,
-            self.settings.ozon_api_key,
-        )
+        self.transport = OzonHttpTransport(self.settings.ozon_client_id, self.settings.ozon_api_key)
+        self.ozon = OzonReadApi(self.transport)
+        supply = SupplyManager(self.storage, self.settings.critical_stock_days, self.settings.min_stock_days, self.settings.comfort_stock_days, self.settings.purchase_group_size)
+        workflow = SupplyWorkflow(self.transport, self.storage, self.storage, WritePolicy(self.settings.live_mode, self.settings.telegram_chat_id))
+        self.handlers = CommandHandlers(self.settings, self.ozon, supply, workflow, self.storage, GitHubReleaseChecker(self.settings.github_repository, self.settings.current_version), UpdateRequestWriter())
+        configured_developer_db = Path(os.getenv("DEVELOPER_AGENT_DB_PATH", str(DB_PATH.with_name("developer_tasks.sqlite3"))))
+        developer_db = configured_developer_db if configured_developer_db.parent.exists() else DB_PATH.with_name("developer_tasks.sqlite3")
+        self.developer_repository = SQLiteDeveloperTaskRepository(developer_db)
+        self.developer_handlers = DeveloperAgentTelegramHandlers(self.developer_repository, self.settings.telegram_chat_id, int(os.getenv("DEVELOPER_AGENT_MAX_ATTEMPTS", "2")))
+        self.workflow = workflow
+        self.scheduler = Scheduler()
         self.running = True
-        self.started_at = datetime.now()
-
-    async def close(self) -> None:
-        await self.telegram.close()
-        await self.ozon.close()
 
     def stop(self) -> None:
         self.running = False
 
-    def is_allowed_chat(self, chat_id: int) -> bool:
-        return chat_id == self.settings.telegram_chat_id
-
-    async def handle_command(self, chat_id: int, text: str) -> None:
-        if not self.is_allowed_chat(chat_id):
-            logger.warning("Отклонён запрос из чужого чата: %s", chat_id)
-            return
-
-        command = text.strip().split()[0].lower()
-        if "@" in command:
-            command = command.split("@", 1)[0]
-
-        if command in {"/start", "/help"}:
-            answer = (
-                "<b>Ozon AI OS запущен ✅</b>\n\n"
-                "Доступные команды:\n"
-                "/status — статус системы\n"
-                "/ozon_test — проверить подключение к Ozon\n"
-                "/settings — правила Supply Manager"
-            )
-        elif command == "/status":
-            uptime = datetime.now() - self.started_at
-            answer = (
-                "<b>Статус Ozon AI OS</b>\n\n"
-                f"Сервер: <code>{socket.gethostname()}</code>\n"
-                f"Работает: {str(uptime).split('.')[0]}\n"
-                f"Безопасный режим: {'нет' if self.settings.live_mode else 'да'}\n"
-                "Supply Manager: подготовлен\n"
-                "Изменения в Ozon: запрещены"
-            )
-        elif command == "/settings":
-            answer = (
-                "<b>Правила AI Supply Manager</b>\n\n"
-                f"Поставщик: {self.settings.supplier_name}\n"
-                f"Срок поставки: {self.settings.supply_lead_days} дней\n"
-                f"Критический запас: {self.settings.critical_stock_days} дней\n"
-                f"Минимальный запас: {self.settings.min_stock_days} дней\n"
-                f"Комфортный запас: {self.settings.comfort_stock_days} дней\n"
-                f"Размер объединённой закупки: около "
-                f"{self.settings.purchase_group_size} товаров"
-            )
-        elif command == "/ozon_test":
-            await self.telegram.send_message(
-                chat_id,
-                "Проверяю подключение к Ozon Seller API…",
-            )
-            try:
-                result = await self.ozon.test_connection()
-                answer = (
-                    "<b>Ozon подключён ✅</b>\n\n"
-                    f"Получено товаров в тестовом запросе: "
-                    f"{result['items_received']}\n"
-                    f"Всего товаров по ответу API: {result['total']}"
-                )
-                log_event("ozon_test_success", str(result))
-            except OzonApiError as exc:
-                answer = (
-                    "<b>Ошибка подключения к Ozon ❌</b>\n\n"
-                    f"<code>{str(exc)}</code>"
-                )
-                log_event("ozon_test_error", str(exc))
-        else:
-            answer = (
-                "Команда пока не распознана.\n"
-                "Используй /start, чтобы увидеть список команд."
-            )
-
-        await self.telegram.send_message(chat_id, answer)
-
     async def run(self) -> None:
-        init_database()
+        self.storage.migrate()
         bot = await self.telegram.get_me()
-        logger.info("Бот подключён: @%s", bot.get("username"))
-        log_event("service_started", f"@{bot.get('username')}")
-
-        # Long polling и webhook взаимоисключающие, поэтому очищаем старый webhook.
+        logger.info("Telegram bot connected: %s", bot.get("username"))
         await self.telegram.delete_webhook()
-
-        await self.telegram.send_message(
-            self.settings.telegram_chat_id,
-            "<b>Ozon AI OS запущен на сервере ✅</b>\n"
-            "Отправь /status для проверки.",
-        )
-
+        self.scheduler.every(300, self.workflow.poll_unfinished, "ozon-operations")
+        self.scheduler.every(self.settings.update_check_minutes * 60, self._background_update_check, "updates")
+        self.scheduler.every(5, self._developer_reports, "developer-reports")
+        self.scheduler.daily(self.settings.report_hour, self.settings.timezone, self._morning_report, "morning-report")
         offset: int | None = None
         while self.running:
             try:
-                updates = await self.telegram.get_updates(offset)
-                for update in updates:
+                for update in await self.telegram.get_updates(offset):
                     offset = int(update["update_id"]) + 1
-                    message = update.get("message") or {}
-                    chat = message.get("chat") or {}
-                    text = message.get("text")
-                    chat_id = chat.get("id")
-                    if isinstance(chat_id, int) and isinstance(text, str):
-                        await self.handle_command(chat_id, text)
-            except (TelegramError, httpx.HTTPError) as exc:
-                logger.exception("Ошибка Telegram: %s", exc)
-                log_event("telegram_error", str(exc))
+                    await self._dispatch(update)
+            except Exception:
+                logger.exception("Polling iteration failed")
                 await asyncio.sleep(5)
-            except Exception as exc:
-                logger.exception("Непредвиденная ошибка: %s", exc)
-                log_event("unexpected_error", repr(exc))
-                await asyncio.sleep(5)
+
+    async def _dispatch(self, update: dict) -> None:
+        if callback := update.get("callback_query"):
+            message = callback.get("message") or {}
+            chat_id = (message.get("chat") or {}).get("id")
+            if isinstance(chat_id, int):
+                callback_data = str(callback.get("data") or "")
+                developer_result = await self.developer_handlers.callback(chat_id, callback_data)
+                if developer_result:
+                    await self.telegram.answer_callback(str(callback.get("id")), "Принято")
+                    await self.telegram.send_message(chat_id, developer_result.text, developer_result.keyboard)
+                    return
+                result = await self.handlers.callback(chat_id, callback_data)
+                await self.telegram.answer_callback(str(callback.get("id")), "Принято")
+                if result:
+                    await self.telegram.send_message(chat_id, result.text, result.keyboard)
+                    if result.document and result.document_name:
+                        await self.telegram.send_document(chat_id, result.document_name, result.document)
+            return
+        message = update.get("message") or {}
+        chat_id, text = (message.get("chat") or {}).get("id"), message.get("text")
+        if isinstance(chat_id, int) and isinstance(text, str):
+            developer_result = await self.developer_handlers.message(chat_id, text)
+            if developer_result:
+                await self.telegram.send_message(chat_id, developer_result.text, developer_result.keyboard)
+                return
+            result = await self.handlers.message(chat_id, text)
+            if result:
+                await self.telegram.send_message(chat_id, result.text, result.keyboard)
+                if result.document and result.document_name:
+                    await self.telegram.send_document(chat_id, result.document_name, result.document)
+
+    async def _background_update_check(self) -> None:
+        release = await self.handlers.updates.check()
+        if release:
+            result = await self.handlers.message(self.settings.telegram_chat_id, "/check_update")
+            if result:
+                await self.telegram.send_message(self.settings.telegram_chat_id, result.text, result.keyboard)
+
+    async def _morning_report(self) -> None:
+        result = await self.handlers.message(self.settings.telegram_chat_id, "/supply_report")
+        if result:
+            await self.telegram.send_message(self.settings.telegram_chat_id, result.text, result.keyboard)
+
+    async def _developer_reports(self) -> None:
+        for task in self.developer_repository.pending_reports():
+            keyboard = task_keyboard(task.id) if task.state.value == "ready" and not task.pushed else None
+            await self.telegram.send_message(task.chat_id, build_task_report(task), keyboard)
+            self.developer_repository.update(task.id, report_sent=True)
+
+    async def close(self) -> None:
+        await self.scheduler.close()
+        await self.telegram.close()
+        await self.transport.close()
 
 
 async def async_main() -> None:
-    app = OzonAiOs()
+    app = Application()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, app.stop)
-
     try:
         await app.run()
     finally:
@@ -157,8 +135,9 @@ async def async_main() -> None:
 
 
 if __name__ == "__main__":
+    configure_logging()
     try:
         asyncio.run(async_main())
     except RuntimeError as exc:
-        logger.error("%s", exc)
+        logger.error("Startup failed: %s", exc)
         sys.exit(1)

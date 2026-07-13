@@ -1,45 +1,37 @@
-# Ozon AI OS — Foundation 0.1.0
+# Ozon AI OS 1.0
 
-Первая серверная основа проекта Ozon AI Team.
+Серверная система управления магазином Ozon через Telegram. Первый релиз включает read-only FBO Supply Manager, безопасный workflow поставок, проверку обновлений и SQLite-аудит.
 
-## Что работает
+По умолчанию `LIVE_MODE=false`: реальные операции записи в Ozon запрещены. Даже в live mode требуется подтверждение разрешённого Telegram-чата.
 
-- Telegram-бот 24/7 через long polling
-- команды `/start`, `/status`, `/ozon_test`, `/settings`
-- проверка доступа к Ozon Seller API
-- SQLite-база для событий и настроек
-- автозапуск и перезапуск через systemd
-- секреты хранятся только в `.env`
-- безопасный режим: никаких изменений в кабинете Ozon
-
-## Установка на Ubuntu 24.04
+## Быстрый старт
 
 ```bash
-sudo bash install.sh
+cp .env.example .env
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python scripts/check.py
+.venv/bin/python -m app.main
 ```
 
-Установщик запросит:
+## Команды
 
-- Telegram Bot Token
-- Telegram Chat ID
-- Ozon Client ID
-- Ozon API Key
+- `/status`, `/settings`, `/ozon_test` — совместимые команды Foundation;
+- `/supply_report`, `/critical_stock`, `/purchase_plan` — Supply Manager;
+- `/clusters`, `/supplies` — Ozon FBO;
+- `/check_update` — GitHub releases.
 
-После установки:
+Формат поставки:
 
-```bash
-systemctl status ozon-ai-os
-journalctl -u ozon-ai-os -n 100 --no-pager
+```text
+Создай поставку в Москву:
+ST-6 120 шт., по 30 в коробке
 ```
 
-## Команды Telegram
+Подробности: [архитектура](docs/architecture-v1.md), [развёртывание](docs/deployment.md).
 
-- `/start` — проверить бота
-- `/status` — статус системы
-- `/ozon_test` — проверить Seller API
-- `/settings` — показать бизнес-правила без секретов
+## Developer Agent
 
-## Безопасность
+Команды `/dev`, `/dev_status`, `/dev_queue`, `/dev_plan`, `/dev_cancel` создают изолированные задачи разработки. Worker работает от `codexdev`, запускает `codex exec` в `workspace-write`, создаёт отдельную ветку и возвращает отчёт после тестов. Автоматические merge и deploy отсутствуют.
 
-Файл `.env` исключён из Git и доступен только системному пользователю.
-Текущая версия работает только на чтение.
+Установка и модель безопасности описаны в [docs/developer-agent.md](docs/developer-agent.md).

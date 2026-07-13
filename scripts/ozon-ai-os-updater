@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+APP_DIR=/opt/ozon-ai-os
+REQUEST_DIR=/run/ozon-ai-os/update-requests
+BACKUP_DIR=/var/backups/ozon-ai-os
+SERVICE=ozon-ai-os.service
+REPOSITORY_FILE=/etc/ozon-ai-os/repository
+
+[[ "${EUID}" -eq 0 ]] || exit 77
+[[ -r "${REPOSITORY_FILE}" ]] || exit 78
+REPOSITORY="$(<"${REPOSITORY_FILE}")"
+[[ "${REPOSITORY}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$ ]] || exit 78
+
+REQUEST="$(find "${REQUEST_DIR}" -maxdepth 1 -type f -name '*.json' -print -quit)"
+[[ -n "${REQUEST}" ]] || exit 0
+VERSION="$(python3 -c 'import json,re,sys; v=str(json.load(open(sys.argv[1], encoding="utf-8"))["version"]); assert re.fullmatch(r"v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?",v); print(v)' "${REQUEST}")"
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP="${BACKUP_DIR}/${STAMP}"
+PREVIOUS="$(git -C "${APP_DIR}" rev-parse HEAD)"
+mkdir -p "${BACKUP}"
+cp --preserve=mode,ownership "${APP_DIR}/.env" "${BACKUP}/.env"
+sqlite3 "${APP_DIR}/data/ozon_ai_os.sqlite3" ".backup '${BACKUP}/ozon_ai_os.sqlite3'"
+git -C "${APP_DIR}" bundle create "${BACKUP}/source.bundle" HEAD
+
+rollback() {
+  git -C "${APP_DIR}" reset --hard "${PREVIOUS}" || true
+  cp "${BACKUP}/ozon_ai_os.sqlite3" "${APP_DIR}/data/ozon_ai_os.sqlite3" || true
+  systemctl restart "${SERVICE}" || true
+}
+trap rollback ERR
+
+git -C "${APP_DIR}" fetch --tags --force "${REPOSITORY}"
+git -C "${APP_DIR}" verify-tag "${VERSION}"
+git -C "${APP_DIR}" checkout --detach "${VERSION}"
+"${APP_DIR}/venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+"${APP_DIR}/venv/bin/python" "${APP_DIR}/scripts/check.py"
+systemctl restart "${SERVICE}"
+systemctl is-active --quiet "${SERVICE}"
+rm -f -- "${REQUEST}"
+trap - ERR

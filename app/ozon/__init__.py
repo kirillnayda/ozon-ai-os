@@ -1,0 +1,2 @@
+"""Адаптеры Ozon Seller API."""
+

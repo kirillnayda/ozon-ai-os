@@ -1,0 +1,32 @@
+[Unit]
+Description=Ozon AI OS Developer Agent worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codexdev
+Group=ozonaidev
+WorkingDirectory=/opt/ozon-ai-developer-agent
+EnvironmentFile=/etc/ozon-ai-developer/config.env
+Environment=HOME=/var/lib/ozon-ai-developer
+Environment=CODEX_HOME=/var/lib/ozon-ai-developer/codex-home
+ExecStart=/opt/ozon-ai-developer-agent/venv/bin/python -m app.developer_agent.service
+Restart=on-failure
+RestartSec=10
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+InaccessiblePaths=/opt/ozon-ai-os
+ReadWritePaths=/opt/ozon-ai-dev /var/lib/ozon-ai-developer /var/log/ozon-ai-developer
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch signed Ozon AI OS update requests
+
+[Path]
+PathExistsGlob=/run/ozon-ai-os/update-requests/*.json
+Unit=ozon-ai-os-updater.service
+
+[Install]
+WantedBy=multi-user.target

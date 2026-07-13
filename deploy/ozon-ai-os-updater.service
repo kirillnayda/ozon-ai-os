@@ -1,0 +1,16 @@
+[Unit]
+Description=Ozon AI OS privileged updater
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/ozon-ai-os-updater
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ozon-ai-os /var/backups/ozon-ai-os /run/ozon-ai-os/update-requests
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
