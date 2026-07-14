@@ -56,6 +56,7 @@ class Settings:
     github_repository: str
     current_version: str
     update_check_minutes: int
+    github_token: str = ""
 
 
 def load_settings(env_file: Path = ENV_FILE) -> Settings:
@@ -91,6 +92,7 @@ def load_settings(env_file: Path = ENV_FILE) -> Settings:
         critical_stock_days=critical,
         purchase_group_size=_integer("PURCHASE_GROUP_SIZE", 6, 1, 100),
         github_repository=os.getenv("GITHUB_REPOSITORY", "").strip(),
-        current_version=os.getenv("CURRENT_VERSION", "1.1.0").strip(),
+        current_version=os.getenv("CURRENT_VERSION", "1.1.1").strip(),
         update_check_minutes=_integer("UPDATE_CHECK_MINUTES", 60, 5, 10080),
+        github_token=os.getenv("GITHUB_TOKEN", "").strip(),
     )

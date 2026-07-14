@@ -47,7 +47,7 @@ class Application:
         dialogs = SupplyDialogService(self.storage, catalog, workflow, test_mode=not self.settings.live_mode, planning=planning)
         inventory_gateway = UnverifiedOzonInventoryGateway() if self.settings.live_mode else MockInventoryGateway()
         self.inventory = InventoryService(inventory_gateway, self.storage, self.storage)
-        self.handlers = CommandHandlers(self.settings, self.ozon, supply, workflow, dialogs, self.storage, GitHubReleaseChecker(self.settings.github_repository, self.settings.current_version), UpdateRequestWriter(), self.inventory)
+        self.handlers = CommandHandlers(self.settings, self.ozon, supply, workflow, dialogs, self.storage, GitHubReleaseChecker(self.settings.github_repository, self.settings.current_version, self.settings.github_token), UpdateRequestWriter(), self.inventory)
         configured_developer_db = Path(os.getenv("DEVELOPER_AGENT_DB_PATH", str(DB_PATH.with_name("developer_tasks.sqlite3"))))
         developer_db = configured_developer_db if configured_developer_db.parent.exists() else DB_PATH.with_name("developer_tasks.sqlite3")
         self.developer_repository = SQLiteDeveloperTaskRepository(developer_db)

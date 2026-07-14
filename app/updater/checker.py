@@ -19,8 +19,8 @@ class ReleaseInfo:
 
 
 class GitHubReleaseChecker:
-    def __init__(self, repository: str, current_version: str) -> None:
-        self.repository, self.current_version = repository, current_version
+    def __init__(self, repository: str, current_version: str, token: str = "") -> None:
+        self.repository, self.current_version, self.token = repository, current_version, token
 
     @staticmethod
     def _tuple(version: str) -> tuple[int, int, int]:
@@ -32,7 +32,10 @@ class GitHubReleaseChecker:
     async def check(self) -> ReleaseInfo | None:
         if not self.repository:
             return None
-        async with httpx.AsyncClient(timeout=15, headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}) as client:
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        async with httpx.AsyncClient(timeout=15, headers=headers) as client:
             response = await client.get(f"https://api.github.com/repos/{self.repository}/releases/latest")
         if response.status_code == 404:
             return None
@@ -43,4 +46,3 @@ class GitHubReleaseChecker:
         if self._tuple(version) <= self._tuple(self.current_version):
             return None
         return ReleaseInfo(version, str(data.get("body") or "Без описания")[:1500], str(data.get("html_url") or ""))
-
