@@ -122,3 +122,18 @@ class SupplyDialogTest(unittest.TestCase):
         failed = self.storage.get(result.operation.id)
         self.assertEqual(failed.error, "RuntimeError")
         self.assertNotIn("external response", failed.error)
+
+    def test_edit_and_remove_before_confirmation(self):
+        result = self._prepare()
+        edited = self.workflow.edit_line(42, result.operation.id, "SKU-1", 60, 20)
+        self.assertIn('"boxes": 3', edited.payload_json)
+        with self.assertRaises(ValueError):
+            self.workflow.remove_line(42, edited.id, "SKU-1")
+
+    def test_create_dialog_from_recommendation(self):
+        result = self.dialog.start_recommended(42, "Москва", {"SKU-1": 120})
+        self.assertIn("рекомендации", result.text)
+        box_prompt = self.dialog.answer(42, "2026-07-20 10:00–12:00")
+        self.assertIn("Рекомендовано 120", box_prompt.text)
+        summary = self.dialog.answer(42, "30")
+        self.assertIn("4 кор.", summary.text)

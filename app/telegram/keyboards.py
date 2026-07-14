@@ -10,7 +10,14 @@ def supply_menu() -> dict:
         [{"text": "Создать поставку", "callback_data": "supply:start"}],
         [{"text": "Предложить по продажам", "callback_data": "supply:suggest"}],
         [{"text": "Статус поставок", "callback_data": "supply:status"}],
+        [{"text": "История и метрики", "callback_data": "supply:history"}],
+        [{"text": "Проверить обновление", "callback_data": "system:update"}],
     ]}
+
+
+def recommendation_keyboard(cluster_ids: list[int]) -> dict:
+    rows = [[{"text": f"Создать по рекомендации · кластер {cluster_id}", "callback_data": f"supply:recommend:{cluster_id}"}] for cluster_id in cluster_ids]
+    return {"inline_keyboard": rows + [[{"text": "Отмена", "callback_data": "supply:status"}]]}
 
 
 def update_keyboard(version: str) -> dict:

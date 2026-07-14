@@ -36,6 +36,8 @@ class WorkflowTest(unittest.TestCase):
             created = asyncio.run(workflow.confirm(42, first.id))
             self.assertEqual(created.state, OperationState.CREATED)
             self.assertEqual(created.external_id, "supply-1")
+            self.assertEqual(created.draft_operation_id, "op-1")
+            self.assertEqual(created.supply_operation_id, "supply-op-1")
             completed, pdf = asyncio.run(workflow.create_cargoes_and_labels_mockable(42, created.id))
             self.assertEqual(completed.state, OperationState.COMPLETED)
             self.assertTrue(pdf.startswith(b"%PDF"))

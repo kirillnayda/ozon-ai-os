@@ -41,28 +41,68 @@ class SupplyWorkflow:
         self.audit.record(str(chat_id), "supply.cancel", "cancelled", operation.id)
         return operation
 
-    async def confirm(self, chat_id: int, operation_id: str) -> SupplyOperation:
+    def edit_line(self, chat_id: int, operation_id: str, offer_id: str, quantity: int, units_per_box: int) -> SupplyOperation:
         operation = self._owned_operation(chat_id, operation_id)
         if operation.state != OperationState.AWAITING_CONFIRMATION:
+            raise ValueError("Редактировать можно только неподтверждённый черновик")
+        if quantity <= 0 or units_per_box <= 0 or quantity % units_per_box:
+            raise ValueError("Количество должно быть положительным и делиться на размер коробки")
+        payload = json.loads(operation.payload_json)
+        replacement = {"offer_id": offer_id, "quantity": quantity, "units_per_box": units_per_box, "boxes": quantity // units_per_box}
+        lines = payload["lines"]
+        for index, line in enumerate(lines):
+            if line["offer_id"] == offer_id:
+                lines[index] = replacement
+                break
+        else:
+            lines.append(replacement)
+        operation = replace(operation, payload_json=json.dumps(payload, ensure_ascii=False))
+        self.operations.save(operation)
+        self.audit.record(str(chat_id), "supply.edit", "updated", operation.id)
+        return operation
+
+    def remove_line(self, chat_id: int, operation_id: str, offer_id: str) -> SupplyOperation:
+        operation = self._owned_operation(chat_id, operation_id)
+        if operation.state != OperationState.AWAITING_CONFIRMATION:
+            raise ValueError("Редактировать можно только неподтверждённый черновик")
+        payload = json.loads(operation.payload_json)
+        payload["lines"] = [line for line in payload["lines"] if line["offer_id"] != offer_id]
+        if not payload["lines"]:
+            raise ValueError("В поставке должна остаться хотя бы одна позиция")
+        operation = replace(operation, payload_json=json.dumps(payload, ensure_ascii=False))
+        self.operations.save(operation)
+        self.audit.record(str(chat_id), "supply.edit", "removed", operation.id)
+        return operation
+
+    async def confirm(self, chat_id: int, operation_id: str) -> SupplyOperation:
+        operation = self._owned_operation(chat_id, operation_id)
+        if operation.state not in {OperationState.AWAITING_CONFIRMATION, OperationState.CREATING, OperationState.WAITING_FOR_OZON}:
             return operation
         self._authorize(chat_id)
-        operation = replace(operation, state=OperationState.CREATING)
-        self.operations.save(operation)
         payload = json.loads(operation.payload_json)
         # Payload разрешается только mock transport, пока production-контракт не подтверждён.
         try:
-            response = await self.transport.request(endpoints.DRAFT_DIRECT_CREATE, payload, allow_mutation=True)
-            draft_operation_id = str(response.get("operation_id") or response.get("draft_id") or "")
-            operation = replace(operation, state=OperationState.WAITING_FOR_OZON, external_id=draft_operation_id)
+            if not operation.draft_operation_id:
+                operation = replace(operation, state=OperationState.CREATING)
+                self.operations.save(operation)
+                response = await self.transport.request(endpoints.DRAFT_DIRECT_CREATE, payload, allow_mutation=True)
+                draft_operation_id = str(response.get("operation_id") or response.get("draft_id") or "")
+                operation = replace(operation, state=OperationState.WAITING_FOR_OZON, external_id=draft_operation_id, draft_operation_id=draft_operation_id)
+                self.operations.save(operation)
+            draft = await self._poll(endpoints.DRAFT_INFO, {"operation_id": operation.draft_operation_id})
+            draft_id = str(draft.get("draft_id") or operation.draft_id or operation.draft_operation_id or "")
+            operation = replace(operation, draft_id=draft_id)
             self.operations.save(operation)
-            draft = await self._poll(endpoints.DRAFT_INFO, {"operation_id": draft_operation_id})
-            supply = await self.transport.request(endpoints.SUPPLY_CREATE, {"draft_id": draft.get("draft_id") or draft_operation_id}, allow_mutation=True)
-            supply_operation_id = str(supply.get("operation_id") or supply.get("supply_id") or "")
-            status = await self._poll(endpoints.SUPPLY_CREATE_STATUS, {"operation_id": supply_operation_id})
+            if not operation.supply_operation_id:
+                supply = await self.transport.request(endpoints.SUPPLY_CREATE, {"draft_id": draft_id}, allow_mutation=True)
+                supply_operation_id = str(supply.get("operation_id") or supply.get("supply_id") or "")
+                operation = replace(operation, supply_operation_id=supply_operation_id)
+                self.operations.save(operation)
+            status = await self._poll(endpoints.SUPPLY_CREATE_STATUS, {"operation_id": operation.supply_operation_id})
         except Exception as exc:
             self._fail(chat_id, operation, exc)
             raise
-        external_id = str(status.get("supply_id") or supply.get("supply_id") or supply_operation_id)
+        external_id = str(status.get("supply_id") or operation.supply_operation_id)
         operation = replace(operation, state=OperationState.SUPPLY_CREATED, external_id=external_id)
         self.operations.save(operation)
         self.audit.record(str(chat_id), "supply.create", "created", operation.id)
@@ -71,7 +111,12 @@ class SupplyWorkflow:
     async def poll_unfinished(self) -> list[tuple[int, str, bytes]]:
         recovered: list[tuple[int, str, bytes]] = []
         for operation in self.operations.unfinished():
-            if operation.state == OperationState.SUPPLY_CREATED:
+            if operation.state in {OperationState.CREATING, OperationState.WAITING_FOR_OZON}:
+                try:
+                    operation = await self.confirm(operation.chat_id, operation.id)
+                except Exception:
+                    continue
+            if operation.state in {OperationState.SUPPLY_CREATED, OperationState.LABELS_REQUESTED, OperationState.LABELS_READY}:
                 try:
                     completed, pdf = await self.create_cargoes_and_labels_mockable(operation.chat_id, operation.id)
                     if completed.state == OperationState.COMPLETED and pdf:
@@ -84,24 +129,24 @@ class SupplyWorkflow:
         """Продолжает подтверждённую операцию; production остаётся fail-closed до DTO verification."""
         operation = self._owned_operation(chat_id, operation_id)
         self._authorize(chat_id)
-        if operation.state != OperationState.SUPPLY_CREATED:
+        if operation.state not in {OperationState.SUPPLY_CREATED, OperationState.WAITING_FOR_OZON, OperationState.LABELS_REQUESTED, OperationState.LABELS_READY}:
             return operation, None
         payload = json.loads(operation.payload_json)
         try:
-            cargo = await self.transport.request(endpoints.CARGOES_CREATE, {"supply_id": operation.external_id, "cargoes": payload["lines"]}, allow_mutation=True)
-            cargo_operation_id = str(cargo.get("operation_id") or "")
-            operation = replace(operation, state=OperationState.CARGOES_CREATING)
-            self.operations.save(operation)
-            await self._poll(endpoints.CARGOES_STATUS, {"operation_id": cargo_operation_id})
-            label = await self.transport.request(endpoints.LABELS_CREATE, {"supply_id": operation.external_id}, allow_mutation=True)
-            label_operation_id = str(label.get("operation_id") or "")
-            operation = replace(operation, state=OperationState.LABELS_CREATING)
-            self.operations.save(operation)
-            label_status = await self._poll(endpoints.LABELS_GET, {"operation_id": label_operation_id})
-            file_guid = str(label_status.get("file_guid") or "")
+            if not operation.cargo_operation_id:
+                cargo = await self.transport.request(endpoints.CARGOES_CREATE, {"supply_id": operation.external_id, "cargoes": payload["lines"]}, allow_mutation=True)
+                operation = replace(operation, state=OperationState.WAITING_FOR_OZON, cargo_operation_id=str(cargo.get("operation_id") or ""))
+                self.operations.save(operation)
+            await self._poll(endpoints.CARGOES_STATUS, {"operation_id": operation.cargo_operation_id})
+            if not operation.label_operation_id:
+                label = await self.transport.request(endpoints.LABELS_CREATE, {"supply_id": operation.external_id}, allow_mutation=True)
+                operation = replace(operation, state=OperationState.LABELS_REQUESTED, label_operation_id=str(label.get("operation_id") or ""))
+                self.operations.save(operation)
+            label_status = await self._poll(endpoints.LABELS_GET, {"operation_id": operation.label_operation_id})
+            file_guid = str(label_status.get("file_guid") or operation.file_guid or "")
             if not file_guid:
                 return operation, None
-            operation = replace(operation, state=OperationState.LABELS_READY)
+            operation = replace(operation, state=OperationState.LABELS_READY, file_guid=file_guid)
             self.operations.save(operation)
             file_endpoint = replace(endpoints.LABELS_FILE, path=endpoints.LABELS_FILE.path.format(file_guid=file_guid))
             pdf = await self.transport.download(file_endpoint)
@@ -112,6 +157,7 @@ class SupplyWorkflow:
             raise
         operation = replace(operation, state=OperationState.COMPLETED)
         self.operations.save(operation)
+        self.operations.queue_pdf(operation.id, chat_id, pdf)
         self.audit.record(str(chat_id), "supply.labels", "completed", operation.id)
         return operation, pdf
 
@@ -143,7 +189,7 @@ class SupplyWorkflow:
 
     def _fail(self, chat_id: int, operation: SupplyOperation, exc: Exception) -> SupplyOperation:
         # Текст исключения может содержать данные внешнего сервиса; сохраняем только безопасный тип.
-        failed = replace(operation, state=OperationState.FAILED, error=type(exc).__name__)
+        failed = replace(operation, state=OperationState.FAILED, error=type(exc).__name__, retry_count=operation.retry_count + 1)
         self.operations.save(failed)
         self.audit.record(str(chat_id), "supply.workflow", "failed", failed.id)
         return failed

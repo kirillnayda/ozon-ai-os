@@ -21,6 +21,7 @@ from app.storage.sqlite import SQLiteStorage
 from app.supply.service import SupplyManager
 from app.supplies.service import SupplyWorkflow
 from app.supplies.dialog import SnapshotProductCatalog, SupplyDialogService
+from app.supplies.contracts import MockSupplyPlanningGateway, UnverifiedOzonSupplyPlanningGateway
 from app.telegram.client import TelegramClient
 from app.telegram.handlers import CommandHandlers
 from app.updater.checker import GitHubReleaseChecker
@@ -37,10 +38,11 @@ class Application:
         self.transport = OzonHttpTransport(self.settings.ozon_client_id, self.settings.ozon_api_key)
         self.supply_transport = self.transport if self.settings.live_mode else SupplyTestTransport()
         self.ozon = OzonReadApi(self.transport)
-        supply = SupplyManager(self.storage, self.settings.critical_stock_days, self.settings.min_stock_days, self.settings.comfort_stock_days, self.settings.purchase_group_size)
+        supply = SupplyManager(self.storage, self.settings.critical_stock_days, self.settings.min_stock_days, self.settings.comfort_stock_days, self.settings.purchase_group_size, self.settings.supply_lead_days)
         workflow = SupplyWorkflow(self.supply_transport, self.storage, self.storage, WritePolicy(self.settings.live_mode, self.settings.telegram_chat_id), test_mode=not self.settings.live_mode)
         catalog = SnapshotProductCatalog(self.storage, ("TEST-SKU",) if not self.settings.live_mode else ())
-        dialogs = SupplyDialogService(self.storage, catalog, workflow, test_mode=not self.settings.live_mode)
+        planning = UnverifiedOzonSupplyPlanningGateway() if self.settings.live_mode else MockSupplyPlanningGateway()
+        dialogs = SupplyDialogService(self.storage, catalog, workflow, test_mode=not self.settings.live_mode, planning=planning)
         self.handlers = CommandHandlers(self.settings, self.ozon, supply, workflow, dialogs, self.storage, GitHubReleaseChecker(self.settings.github_repository, self.settings.current_version), UpdateRequestWriter())
         configured_developer_db = Path(os.getenv("DEVELOPER_AGENT_DB_PATH", str(DB_PATH.with_name("developer_tasks.sqlite3"))))
         developer_db = configured_developer_db if configured_developer_db.parent.exists() else DB_PATH.with_name("developer_tasks.sqlite3")
@@ -59,6 +61,7 @@ class Application:
         logger.info("Telegram bot connected: %s", bot.get("username"))
         await self.telegram.delete_webhook()
         self.scheduler.every(300, self._recover_supply_operations, "ozon-operations")
+        self.scheduler.every(60, self._deliver_pdf_outbox, "supply-pdf-outbox")
         self.scheduler.every(self.settings.update_check_minutes * 60, self._background_update_check, "updates")
         self.scheduler.every(5, self._developer_reports, "developer-reports")
         self.scheduler.daily(self.settings.report_hour, self.settings.timezone, self._morning_report, "morning-report")
@@ -89,6 +92,8 @@ class Application:
                     await self.telegram.send_message(chat_id, result.text, result.keyboard)
                     if result.document and result.document_name:
                         await self.telegram.send_document(chat_id, result.document_name, result.document)
+                        if result.operation_id:
+                            self.storage.mark_operation_pdf_delivered(result.operation_id)
             return
         message = update.get("message") or {}
         chat_id, text = (message.get("chat") or {}).get("id"), message.get("text")
@@ -102,6 +107,8 @@ class Application:
                 await self.telegram.send_message(chat_id, result.text, result.keyboard)
                 if result.document and result.document_name:
                     await self.telegram.send_document(chat_id, result.document_name, result.document)
+                    if result.operation_id:
+                        self.storage.mark_operation_pdf_delivered(result.operation_id)
 
     async def _background_update_check(self) -> None:
         release = await self.handlers.updates.check()
@@ -114,6 +121,15 @@ class Application:
         for chat_id, operation_id, pdf in await self.workflow.poll_unfinished():
             await self.telegram.send_message(chat_id, f"Поставка восстановлена после перезапуска и завершена · <code>{operation_id}</code>")
             await self.telegram.send_document(chat_id, f"ozon-cargo-labels-{operation_id}.pdf", pdf)
+            self.storage.mark_operation_pdf_delivered(operation_id)
+
+    async def _deliver_pdf_outbox(self) -> None:
+        for item in self.storage.pending_pdfs():
+            path = Path(item.path)
+            if not path.is_file():
+                continue
+            await self.telegram.send_document(item.chat_id, f"ozon-cargo-labels-{item.operation_id}.pdf", path.read_bytes())
+            self.storage.mark_pdf_delivered(item.id)
 
     async def _morning_report(self) -> None:
         result = await self.handlers.message(self.settings.telegram_chat_id, "/supply_report")

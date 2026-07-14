@@ -21,4 +21,7 @@ class SupplyRecommendation:
     stock_days: float | None
     recommended_quantity: int
     level: StockLevel
-
+    safety_stock: int = 0
+    in_transit: int = 0
+    trend: str = "stable"
+    reason: str = ""

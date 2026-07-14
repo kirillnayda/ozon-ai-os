@@ -8,6 +8,7 @@ from app.storage.models import SupplyDialog, SupplyOperation
 from app.storage.repositories import SnapshotRepository, SupplyDialogRepository
 from app.supplies.models import SupplyIntent, SupplyLine
 from app.supplies.service import SupplyWorkflow
+from app.supplies.contracts import MockSupplyPlanningGateway, SupplyPlanningGateway
 
 
 class ProductCatalog(Protocol):
@@ -32,15 +33,23 @@ class DialogResult:
 class SupplyDialogService:
     """Persisted Telegram wizard. It performs no Ozon mutations."""
 
-    def __init__(self, dialogs: SupplyDialogRepository, catalog: ProductCatalog, workflow: SupplyWorkflow, test_mode: bool, *, test_clusters: tuple[str, ...] = ("Москва", "Санкт-Петербург"), test_slots: tuple[str, ...] = ("2026-07-20 10:00–12:00", "2026-07-21 14:00–16:00")) -> None:
+    def __init__(self, dialogs: SupplyDialogRepository, catalog: ProductCatalog, workflow: SupplyWorkflow, test_mode: bool, *, planning: SupplyPlanningGateway | None = None, max_boxes: int = 1000) -> None:
         self.dialogs, self.catalog, self.workflow, self.test_mode = dialogs, catalog, workflow, test_mode
-        self.test_clusters, self.test_slots = test_clusters, test_slots
+        self.planning = planning or MockSupplyPlanningGateway()
+        self.max_boxes = max_boxes
 
     def start(self, chat_id: int) -> DialogResult:
         self.dialogs.save_dialog(SupplyDialog(chat_id, "destination", {}))
         mode = "\n🧪 Тестовый режим: реальная поставка создана не будет." if self.test_mode else ""
-        choices = "\nДоступные тестовые кластеры: " + ", ".join(html_escape(item) for item in self.test_clusters) if self.test_mode else ""
+        choices = "\nДоступные тестовые кластеры: " + ", ".join(html_escape(item) for item in self.planning.clusters()) if self.test_mode else ""
         return DialogResult("<b>Новая FBO-поставка</b>" + mode + choices + "\n\nУкажите кластер или направление поставки.")
+
+    def start_recommended(self, chat_id: int, cluster: str, quantities: dict[str, int]) -> DialogResult:
+        if not quantities:
+            return DialogResult("Для этого кластера нет позиций к поставке.")
+        self.dialogs.save_dialog(SupplyDialog(chat_id, "slot", {"destination": cluster, "recommended": quantities}))
+        slots = "\n".join(f"• <code>{html_escape(item)}</code>" for item in self.planning.timeslots(cluster))
+        return DialogResult(f"<b>Поставка по рекомендации · {html_escape(cluster)}</b>\nВыберите таймслот:\n{slots}")
 
     def cancel(self, chat_id: int) -> DialogResult:
         self.dialogs.delete_dialog(chat_id)
@@ -59,15 +68,19 @@ class SupplyDialogService:
         data = dict(dialog.data)
 
         if dialog.step == "destination":
-            if self.test_mode and value not in self.test_clusters:
-                return DialogResult("Недоступный тестовый кластер. Выберите: " + ", ".join(html_escape(item) for item in self.test_clusters))
+            if self.test_mode and value not in self.planning.clusters():
+                return DialogResult("Недоступный тестовый кластер. Выберите: " + ", ".join(html_escape(item) for item in self.planning.clusters()))
             data["destination"] = value
-            slots = "\n".join(f"• <code>{html_escape(item)}</code>" for item in self.test_slots)
+            slots = "\n".join(f"• <code>{html_escape(item)}</code>" for item in self.planning.timeslots(value))
             return self._advance(dialog, "slot", data, "Выберите доступный таймслот:\n" + slots if self.test_mode else "Укажите дату и доступный таймслот.")
         if dialog.step == "slot":
-            if self.test_mode and value not in self.test_slots:
+            if self.test_mode and value not in self.planning.timeslots(data["destination"]):
                 return DialogResult("Этот тестовый таймслот недоступен. Выберите один из показанных выше.")
             data["timeslot"] = value
+            if data.get("recommended"):
+                articles = list(data["recommended"])
+                data.update({"articles": articles, "lines": [], "article_index": 0, "current_quantity": int(data["recommended"][articles[0]])})
+                return self._advance(dialog, "units_per_box", data, f"Рекомендовано {data['current_quantity']} шт. <code>{html_escape(articles[0])}</code>. Сколько единиц в коробке?")
             return self._advance(dialog, "articles", data, "Введите артикулы через запятую, например <code>TEST-SKU, SKU-2</code>.")
         if dialog.step == "articles":
             articles = [item.strip() for item in value.replace("\n", ",").split(",") if item.strip()]
@@ -90,6 +103,9 @@ class SupplyDialogService:
             if isinstance(units_per_box, str):
                 return DialogResult(units_per_box)
             quantity = int(data["current_quantity"])
+            restriction = self.planning.restriction(data["articles"][data["article_index"]], data["destination"], quantity)
+            if not restriction.allowed:
+                return DialogResult(f"Позиция не проходит ограничения поставки: {html_escape(restriction.reason_code)}.")
             if quantity % units_per_box:
                 return DialogResult(f"Количество {quantity} не делится на размер коробки {units_per_box}. Введите другой размер коробки.")
             index = int(data["article_index"])
@@ -99,8 +115,13 @@ class SupplyDialogService:
             if index < len(data["articles"]):
                 data["article_index"] = index
                 data.pop("current_quantity", None)
+                if data.get("recommended"):
+                    data["current_quantity"] = int(data["recommended"][data["articles"][index]])
+                    return self._advance(dialog, "units_per_box", data, f"Рекомендовано {data['current_quantity']} шт. <code>{html_escape(data['articles'][index])}</code>. Сколько единиц в коробке?")
                 return self._advance(dialog, "quantity", data, f"Количество для <code>{html_escape(data['articles'][index])}</code>?")
             intent = SupplyIntent(data["destination"], tuple(SupplyLine(**line) for line in data["lines"]))
+            if intent.boxes > self.max_boxes:
+                return DialogResult(f"В поставке {intent.boxes} коробок, лимит — {self.max_boxes}. Уменьшите состав.")
             operation = self.workflow.prepare(chat_id, intent, {"timeslot": data["timeslot"]})
             self.dialogs.delete_dialog(chat_id)
             lines = ["<b>Проверьте состав поставки</b>", f"Кластер: {html_escape(data['destination'])}", f"Таймслот: {html_escape(data['timeslot'])}", ""]

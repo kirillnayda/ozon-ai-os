@@ -10,4 +10,6 @@ def render_report(items: list[SupplyRecommendation]) -> str:
         lines.append(f"\n<b>{html_escape(item.offer_id)}</b> · {html_escape(item.cluster_name)}")
         lines.append(f"остаток {item.available}, спрос {item.daily_demand:.2f}/день, запас {days}")
         lines.append(f"рекомендация: {item.recommended_quantity} шт. · {item.level.value}")
+        if item.reason:
+            lines.append(f"<i>{html_escape(item.reason)}</i>")
     return "\n".join(lines)

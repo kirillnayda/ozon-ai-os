@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
@@ -52,7 +53,7 @@ class OzonHttpTransport:
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 if attempt == self._retries:
                     raise ExternalServiceError("Ozon API временно недоступен") from exc
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(min(2 ** attempt, 30) + random.uniform(0, 0.25))
                 continue
             if response.status_code < 400:
                 return response
@@ -60,7 +61,7 @@ class OzonHttpTransport:
                 raise ExternalServiceError("Ozon отклонил авторизацию")
             if response.status_code in {409, 429} or response.status_code >= 500:
                 if attempt < self._retries:
-                    delay = min(float(response.headers.get("Retry-After", 2 ** attempt)), 30)
+                    delay = min(float(response.headers.get("Retry-After", 2 ** attempt)), 30) + random.uniform(0, 0.25)
                     await asyncio.sleep(delay)
                     continue
             raise ExternalServiceError(f"Ozon API вернул HTTP {response.status_code}")

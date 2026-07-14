@@ -14,7 +14,7 @@ from app.supply.service import SupplyManager
 from app.supplies.parser import parse_supply_intent
 from app.supplies.dialog import SupplyDialogService
 from app.supplies.service import SupplyWorkflow
-from app.telegram.keyboards import confirmation_keyboard, supply_menu, update_keyboard
+from app.telegram.keyboards import confirmation_keyboard, recommendation_keyboard, supply_menu, update_keyboard
 from app.updater.checker import GitHubReleaseChecker
 from app.updater.request import UpdateRequestWriter
 
@@ -25,9 +25,22 @@ class HandlerResult:
     keyboard: dict | None = None
     document_name: str | None = None
     document: bytes | None = None
+    operation_id: str | None = None
 
 
 class CommandHandlers:
+    STATE_LABELS = {
+        OperationState.DRAFT_CREATED: "Черновик подготовлен",
+        OperationState.AWAITING_CONFIRMATION: "Ожидает подтверждения",
+        OperationState.CREATING: "Создаётся draft",
+        OperationState.WAITING_FOR_OZON: "Ozon обрабатывает",
+        OperationState.SUPPLY_CREATED: "Поставка создана",
+        OperationState.LABELS_REQUESTED: "Формируются этикетки",
+        OperationState.LABELS_READY: "Этикетки готовы",
+        OperationState.COMPLETED: "Завершено",
+        OperationState.CANCELLED: "Отменено",
+        OperationState.FAILED: "Требуется внимание",
+    }
     def __init__(self, settings: Settings, ozon: OzonReadApi, supply: SupplyManager, workflow: SupplyWorkflow, dialogs: SupplyDialogService, operations: OperationRepository, updates: GitHubReleaseChecker, update_writer: UpdateRequestWriter) -> None:
         self.settings, self.ozon, self.supply, self.workflow = settings, ozon, supply, workflow
         self.dialogs, self.operations, self.updates, self.update_writer = dialogs, operations, updates, update_writer
@@ -51,7 +64,11 @@ class CommandHandlers:
                 return HandlerResult(self.dialogs.start(chat_id).text)
             if ("предлож" in normalized or "рекомен" in normalized) and "постав" in normalized:
                 items = [x for group in self.supply.purchase_groups() for x in group]
-                return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", supply_menu())
+                return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", recommendation_keyboard(sorted({x.cluster_id for x in items})) if items else supply_menu())
+            if "истори" in normalized and "постав" in normalized:
+                return self._history(chat_id)
+            if "статус" in normalized and "постав" in normalized:
+                return self._status()
             try:
                 intent = parse_supply_intent(stripped)
             except ValueError as exc:
@@ -65,7 +82,7 @@ class CommandHandlers:
 
         command = stripped.split(maxsplit=1)[0].split("@", 1)[0].lower()
         if command in {"/start", "/help"}:
-            return HandlerResult("<b>Ozon AI OS 1.0</b>\n/status /supplies /supply_status /supply_cancel /supply_test /supply_suggest /supply_report /critical_stock /purchase_plan /clusters /check_update /settings /ozon_test\n\nМожно написать: «Создать поставку» или «Предложи поставку».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
+            return HandlerResult("<b>Ozon AI OS 1.0</b>\n/status /supplies /supply_status /supply_history /supply_metrics /supply_cancel /supply_test /supply_suggest /supply_edit /supply_remove /update /settings\n\nМожно написать: «Создать поставку», «Предложи поставку», «История поставок».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
         if command == "/status":
             uptime = str(datetime.now() - self.started_at).split(".")[0]
             return HandlerResult(f"<b>Статус Ozon AI OS</b>\nСервер: <code>{html_escape(socket.gethostname())}</code>\nРаботает: {uptime}\nLIVE_MODE: {'включён' if self.settings.live_mode else 'выключен'}")
@@ -93,7 +110,25 @@ class CommandHandlers:
             return HandlerResult(self.dialogs.start(chat_id).text)
         if command == "/supply_suggest":
             items = [x for group in self.supply.purchase_groups() for x in group]
-            return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", supply_menu())
+            return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", recommendation_keyboard(sorted({x.cluster_id for x in items})) if items else supply_menu())
+        if command == "/supply_edit":
+            parts = stripped.split()
+            if len(parts) != 5:
+                return HandlerResult("Формат: <code>/supply_edit ID АРТИКУЛ КОЛИЧЕСТВО В_КОРОБКЕ</code>")
+            try:
+                operation = self.workflow.edit_line(chat_id, parts[1], parts[2], int(parts[3]), int(parts[4]))
+            except (ValueError, PermissionError) as exc:
+                return HandlerResult(html_escape(exc))
+            return HandlerResult(f"Черновик обновлён · {html_escape(operation.id)}", confirmation_keyboard(operation.id))
+        if command == "/supply_remove":
+            parts = stripped.split()
+            if len(parts) != 3:
+                return HandlerResult("Формат: <code>/supply_remove ID АРТИКУЛ</code>")
+            try:
+                operation = self.workflow.remove_line(chat_id, parts[1], parts[2])
+            except (ValueError, PermissionError) as exc:
+                return HandlerResult(html_escape(exc))
+            return HandlerResult(f"Позиция удалена · {html_escape(operation.id)}", confirmation_keyboard(operation.id))
         if command == "/supply_cancel":
             parts = stripped.split(maxsplit=1)
             if len(parts) == 1:
@@ -101,9 +136,13 @@ class CommandHandlers:
             operation = self.workflow.cancel(chat_id, parts[1].strip())
             return HandlerResult(f"Поставка отменена · {html_escape(operation.id)}" if operation.state == OperationState.CANCELLED else f"Поставку уже нельзя отменить: {operation.state.value}")
         if command == "/supply_status":
-            rows = self.operations.unfinished()
-            return HandlerResult("<b>Незавершённые поставки</b>\n" + ("\n".join(f"{html_escape(x.id)} · {x.state.value} · {html_escape(x.destination)}" for x in rows) or "Нет"))
-        if command == "/check_update":
+            return self._status()
+        if command == "/supply_history":
+            return self._history(chat_id)
+        if command == "/supply_metrics":
+            metrics = self.operations.supply_metrics()
+            return HandlerResult("<b>Метрики поставок</b>\n" + "\n".join(f"{html_escape(key)}: {value}" for key, value in sorted(metrics.items())))
+        if command in {"/check_update", "/update"}:
             release = await self.updates.check()
             if not release:
                 return HandlerResult(f"Установлена актуальная версия {html_escape(self.settings.current_version)}")
@@ -117,11 +156,24 @@ class CommandHandlers:
             return HandlerResult(self.dialogs.start(chat_id).text)
         if data == "supply:suggest":
             items = [x for group in self.supply.purchase_groups() for x in group]
-            return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", supply_menu())
+            return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", recommendation_keyboard(sorted({x.cluster_id for x in items})) if items else supply_menu())
         if data == "supply:status":
-            rows = self.operations.unfinished()
-            return HandlerResult("<b>Незавершённые поставки</b>\n" + ("\n".join(f"{html_escape(x.id)} · {x.state.value} · {html_escape(x.destination)}" for x in rows) or "Нет"))
+            return self._status()
+        if data == "supply:history":
+            return self._history(chat_id)
+        if data == "system:update":
+            return await self.message(chat_id, "/update")
         parts = data.split(":", 2)
+        if len(parts) == 3 and parts[:2] == ["supply", "recommend"]:
+            try:
+                cluster_id = int(parts[2])
+            except ValueError:
+                return HandlerResult("Некорректный кластер.")
+            items = [x for group in self.supply.purchase_groups() for x in group if x.cluster_id == cluster_id]
+            if not items:
+                return HandlerResult("Рекомендация устарела. Обновите расчёт.")
+            result = self.dialogs.start_recommended(chat_id, items[0].cluster_name, {x.offer_id: x.recommended_quantity for x in items})
+            return HandlerResult(result.text)
         if len(parts) == 3 and parts[:2] == ["supply", "confirm"]:
             try:
                 operation = await self.workflow.confirm(chat_id, parts[2])
@@ -136,6 +188,7 @@ class CommandHandlers:
                 ("🧪 Тестовая поставка завершена" if not self.settings.live_mode else "Поставка завершена") + f" · {html_escape(operation.id)}",
                 document_name=f"ozon-cargo-labels-{operation.id}.pdf" if pdf else None,
                 document=pdf,
+                operation_id=operation.id,
             )
         if len(parts) == 3 and parts[:2] == ["supply", "cancel"]:
             operation = self.workflow.cancel(chat_id, parts[2])
@@ -153,3 +206,11 @@ class CommandHandlers:
         if data == "update:later":
             return HandlerResult("Обновление отложено.")
         return HandlerResult("Действие устарело или не поддерживается.")
+
+    def _status(self) -> HandlerResult:
+        rows = self.operations.unfinished()
+        return HandlerResult("<b>Активные поставки</b>\n" + ("\n".join(f"{html_escape(x.id)} · {self.STATE_LABELS[x.state]} · {html_escape(x.destination)}" for x in rows) or "Нет"))
+
+    def _history(self, chat_id: int) -> HandlerResult:
+        rows = self.operations.history(chat_id)
+        return HandlerResult("<b>История поставок</b>\n" + ("\n".join(f"{html_escape(x.id)} · {self.STATE_LABELS[x.state]} · {html_escape(x.destination)}" for x in rows) or "История пуста"))

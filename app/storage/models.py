@@ -56,6 +56,13 @@ class SupplyOperation:
     payload_json: str
     external_id: str | None = None
     error: str | None = None
+    draft_operation_id: str | None = None
+    draft_id: str | None = None
+    supply_operation_id: str | None = None
+    cargo_operation_id: str | None = None
+    label_operation_id: str | None = None
+    file_guid: str | None = None
+    retry_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -63,3 +70,13 @@ class SupplyDialog:
     chat_id: int
     step: str
     data: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PdfOutboxItem:
+    id: str
+    operation_id: str
+    chat_id: int
+    path: str
+    state: str
+    attempts: int = 0

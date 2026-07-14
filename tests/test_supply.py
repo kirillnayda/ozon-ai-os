@@ -28,3 +28,7 @@ class SupplyManagerTest(unittest.TestCase):
         manager = SupplyManager(MemorySnapshots(), group_size=1)
         self.assertEqual(len(manager.purchase_groups()), 1)
 
+    def test_recommendation_explains_forecast(self):
+        item = SupplyManager(MemorySnapshots()).recommendations()[0]
+        self.assertIn("прогноз", item.reason)
+        self.assertGreaterEqual(item.safety_stock, 0)
