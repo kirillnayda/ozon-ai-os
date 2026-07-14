@@ -27,10 +27,17 @@ class SupplyWorkflow:
         self.audit.record(str(chat_id), "supply.prepare", "awaiting_confirmation", operation.id)
         return operation
 
+    def cancel(self, chat_id: int, operation_id: str) -> SupplyOperation:
+        operation = self._owned_operation(chat_id, operation_id)
+        if operation.state != OperationState.AWAITING_CONFIRMATION:
+            return operation
+        operation = replace(operation, state=OperationState.CANCELLED)
+        self.operations.save(operation)
+        self.audit.record(str(chat_id), "supply.cancel", "cancelled", operation.id)
+        return operation
+
     async def confirm(self, chat_id: int, operation_id: str) -> SupplyOperation:
-        operation = self.operations.get(operation_id)
-        if not operation or operation.chat_id != chat_id:
-            raise PermissionError("Операция не найдена")
+        operation = self._owned_operation(chat_id, operation_id)
         if operation.state != OperationState.AWAITING_CONFIRMATION:
             return operation
         self.policy.require(chat_id, confirmed=True)
@@ -38,7 +45,11 @@ class SupplyWorkflow:
         self.operations.save(operation)
         payload = json.loads(operation.payload_json)
         # Payload разрешается только mock transport, пока production-контракт не подтверждён.
-        response = await self.transport.request(endpoints.DRAFT_DIRECT_CREATE, payload, allow_mutation=True)
+        try:
+            response = await self.transport.request(endpoints.DRAFT_DIRECT_CREATE, payload, allow_mutation=True)
+        except Exception as exc:
+            self._fail(chat_id, operation, exc)
+            raise
         external_id = str(response.get("operation_id") or response.get("draft_id") or "")
         operation = replace(operation, state=OperationState.CREATED, external_id=external_id)
         self.operations.save(operation)
@@ -52,31 +63,46 @@ class SupplyWorkflow:
 
     async def create_cargoes_and_labels_mockable(self, chat_id: int, operation_id: str) -> tuple[SupplyOperation, bytes | None]:
         """Продолжает подтверждённую операцию; production остаётся fail-closed до DTO verification."""
-        operation = self.operations.get(operation_id)
-        if not operation or operation.chat_id != chat_id:
-            raise PermissionError("Операция не найдена")
+        operation = self._owned_operation(chat_id, operation_id)
         self.policy.require(chat_id, confirmed=True)
         if operation.state != OperationState.CREATED:
             return operation, None
         payload = json.loads(operation.payload_json)
-        cargo = await self.transport.request(endpoints.CARGOES_CREATE, {"supply_id": operation.external_id, "cargoes": payload["lines"]}, allow_mutation=True)
-        cargo_operation_id = str(cargo.get("operation_id") or "")
-        operation = replace(operation, state=OperationState.CARGOES_CREATING)
-        self.operations.save(operation)
-        await self.transport.request(endpoints.CARGOES_STATUS, {"operation_id": cargo_operation_id})
-        label = await self.transport.request(endpoints.LABELS_CREATE, {"supply_id": operation.external_id}, allow_mutation=True)
-        label_operation_id = str(label.get("operation_id") or "")
-        operation = replace(operation, state=OperationState.LABELS_CREATING)
-        self.operations.save(operation)
-        label_status = await self.transport.request(endpoints.LABELS_GET, {"operation_id": label_operation_id})
-        file_guid = str(label_status.get("file_guid") or "")
-        if not file_guid:
-            return operation, None
-        file_endpoint = replace(endpoints.LABELS_FILE, path=endpoints.LABELS_FILE.path.format(file_guid=file_guid))
-        pdf = await self.transport.download(file_endpoint)
-        if not pdf.startswith(b"%PDF"):
-            raise ValueError("Файл этикеток не является PDF")
+        try:
+            cargo = await self.transport.request(endpoints.CARGOES_CREATE, {"supply_id": operation.external_id, "cargoes": payload["lines"]}, allow_mutation=True)
+            cargo_operation_id = str(cargo.get("operation_id") or "")
+            operation = replace(operation, state=OperationState.CARGOES_CREATING)
+            self.operations.save(operation)
+            await self.transport.request(endpoints.CARGOES_STATUS, {"operation_id": cargo_operation_id})
+            label = await self.transport.request(endpoints.LABELS_CREATE, {"supply_id": operation.external_id}, allow_mutation=True)
+            label_operation_id = str(label.get("operation_id") or "")
+            operation = replace(operation, state=OperationState.LABELS_CREATING)
+            self.operations.save(operation)
+            label_status = await self.transport.request(endpoints.LABELS_GET, {"operation_id": label_operation_id})
+            file_guid = str(label_status.get("file_guid") or "")
+            if not file_guid:
+                return operation, None
+            file_endpoint = replace(endpoints.LABELS_FILE, path=endpoints.LABELS_FILE.path.format(file_guid=file_guid))
+            pdf = await self.transport.download(file_endpoint)
+            if not pdf.startswith(b"%PDF"):
+                raise ValueError("Файл этикеток не является PDF")
+        except Exception as exc:
+            self._fail(chat_id, operation, exc)
+            raise
         operation = replace(operation, state=OperationState.COMPLETED)
         self.operations.save(operation)
         self.audit.record(str(chat_id), "supply.labels", "completed", operation.id)
         return operation, pdf
+
+    def _owned_operation(self, chat_id: int, operation_id: str) -> SupplyOperation:
+        operation = self.operations.get(operation_id)
+        if not operation or operation.chat_id != chat_id:
+            raise PermissionError("Операция не найдена")
+        return operation
+
+    def _fail(self, chat_id: int, operation: SupplyOperation, exc: Exception) -> SupplyOperation:
+        # Текст исключения может содержать данные внешнего сервиса; сохраняем только безопасный тип.
+        failed = replace(operation, state=OperationState.FAILED, error=type(exc).__name__)
+        self.operations.save(failed)
+        self.audit.record(str(chat_id), "supply.workflow", "failed", failed.id)
+        return failed

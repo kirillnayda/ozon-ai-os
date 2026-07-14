@@ -22,7 +22,7 @@
 
 ## State machine поставки
 
-`draft → awaiting_confirmation → creating → created → cargoes_creating → labels_creating → labels_ready → completed`, при ошибке — `failed`.
+`draft → awaiting_confirmation → creating → created → cargoes_creating → labels_creating → labels_ready → completed`, при ошибке — `failed`. Из `awaiting_confirmation` локальный черновик можно перевести в терминальное состояние `cancelled`; запрос к Ozon при этом не выполняется.
 
 Повторный одинаковый intent того же чата возвращает сохранённую операцию. Terminal state не запускается повторно. Реальный transport не вызывает mutating endpoint, пока его контракт не помечен проверенным.
 

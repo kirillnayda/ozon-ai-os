@@ -7,6 +7,7 @@ import socket
 from app.config import Settings
 from app.core.security import html_escape
 from app.ozon.read_api import OzonReadApi
+from app.storage.models import OperationState
 from app.storage.repositories import OperationRepository
 from app.supply.report import render_report
 from app.supply.service import SupplyManager
@@ -96,6 +97,11 @@ class CommandHandlers:
                 document_name=f"ozon-cargo-labels-{operation.id}.pdf" if pdf else None,
                 document=pdf,
             )
+        if len(parts) == 3 and parts[:2] == ["supply", "cancel"]:
+            operation = self.workflow.cancel(chat_id, parts[2])
+            if operation.state == OperationState.CANCELLED:
+                return HandlerResult(f"Поставка отменена · {html_escape(operation.id)}")
+            return HandlerResult(f"Поставку уже нельзя отменить: {operation.state.value} · {html_escape(operation.id)}")
         if len(parts) == 3 and parts[:2] == ["update", "apply"]:
             self.update_writer.create(parts[2], chat_id)
             return HandlerResult(f"Обновление {html_escape(parts[2])} передано безопасному updater.")

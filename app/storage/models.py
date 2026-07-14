@@ -15,6 +15,7 @@ class OperationState(StrEnum):
     LABELS_CREATING = "labels_creating"
     LABELS_READY = "labels_ready"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
@@ -51,4 +52,3 @@ class SupplyOperation:
     payload_json: str
     external_id: str | None = None
     error: str | None = None
-

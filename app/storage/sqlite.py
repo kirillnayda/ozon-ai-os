@@ -92,9 +92,9 @@ class SQLiteStorage:
             connection.execute("UPDATE supply_operations SET state=?, external_id=?, error=?, updated_at=? WHERE id=?", (operation.state.value, operation.external_id, operation.error, datetime.now(timezone.utc).isoformat(), operation.id))
 
     def unfinished(self) -> list[SupplyOperation]:
-        terminal = (OperationState.COMPLETED.value, OperationState.FAILED.value)
+        terminal = (OperationState.COMPLETED.value, OperationState.CANCELLED.value, OperationState.FAILED.value)
         with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM supply_operations WHERE state NOT IN (?, ?)", terminal).fetchall()
+            rows = connection.execute("SELECT * FROM supply_operations WHERE state NOT IN (?, ?, ?)", terminal).fetchall()
         return [self._operation(row) for row in rows]
 
     @staticmethod
