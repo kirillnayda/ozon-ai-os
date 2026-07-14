@@ -17,7 +17,8 @@ python3 -m venv .venv
 ## Команды
 
 - `/status`, `/settings`, `/ozon_test` — совместимые команды Foundation;
-- `/supply_report`, `/critical_stock`, `/purchase_plan` — Supply Manager;
+- `/supply_report`, `/critical_stock`, `/purchase_plan`, `/supply_suggest` — анализ среднесуточных продаж и рекомендации;
+- `/supplies`, `/supply_test`, `/supply_status`, `/supply_cancel` — пошаговый менеджер FBO-поставок;
 - `/clusters`, `/supplies` — Ozon FBO;
 - `/check_update` — GitHub releases.
 

@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from app.core.security import WritePolicy
-from app.ozon.endpoints import CARGOES_CREATE, CARGOES_STATUS, DRAFT_DIRECT_CREATE, LABELS_CREATE, LABELS_FILE, LABELS_GET
+from app.ozon.endpoints import CARGOES_CREATE, CARGOES_STATUS, DRAFT_DIRECT_CREATE, DRAFT_INFO, LABELS_CREATE, LABELS_FILE, LABELS_GET, SUPPLY_CREATE, SUPPLY_CREATE_STATUS
 from app.ozon.transport import MockTransport
 from app.storage.models import OperationState
 from app.storage.sqlite import SQLiteStorage
@@ -19,6 +19,9 @@ class WorkflowTest(unittest.TestCase):
             storage.migrate()
             transport = MockTransport({
                 DRAFT_DIRECT_CREATE.path: [{"operation_id": "op-1"}],
+                DRAFT_INFO.path: [{"status": "success", "draft_id": "draft-1"}],
+                SUPPLY_CREATE.path: [{"operation_id": "supply-op-1"}],
+                SUPPLY_CREATE_STATUS.path: [{"status": "success", "supply_id": "supply-1"}],
                 CARGOES_CREATE.path: [{"operation_id": "cargo-1"}],
                 CARGOES_STATUS.path: [{"status": "success"}],
                 LABELS_CREATE.path: [{"operation_id": "label-1"}],
@@ -32,7 +35,7 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(first.id, second.id)
             created = asyncio.run(workflow.confirm(42, first.id))
             self.assertEqual(created.state, OperationState.CREATED)
-            self.assertEqual(created.external_id, "op-1")
+            self.assertEqual(created.external_id, "supply-1")
             completed, pdf = asyncio.run(workflow.create_cargoes_and_labels_mockable(42, created.id))
             self.assertEqual(completed.state, OperationState.COMPLETED)
             self.assertTrue(pdf.startswith(b"%PDF"))

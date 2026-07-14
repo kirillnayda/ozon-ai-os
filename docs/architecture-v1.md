@@ -22,7 +22,9 @@
 
 ## State machine поставки
 
-`draft → awaiting_confirmation → creating → created → cargoes_creating → labels_creating → labels_ready → completed`, при ошибке — `failed`. Из `awaiting_confirmation` локальный черновик можно перевести в терминальное состояние `cancelled`; запрос к Ozon при этом не выполняется.
+`draft_created → awaiting_confirmation → creating → waiting_for_ozon → supply_created → labels_requested → labels_ready → completed`, при ошибке — `failed`. Из `awaiting_confirmation` локальный черновик можно перевести в терминальное состояние `cancelled`; запрос к Ozon при этом не выполняется.
+
+Пошаговый Telegram-сценарий хранится в `supply_dialogs`, поэтому выбор кластера, таймслота и состава не теряется при перезапуске. Конкретный склад пользователь не выбирает: его должен вернуть Ozon после обработки draft. При `LIVE_MODE=false` используется сетево-изолированный `SupplyTestTransport`, который проходит тот же orchestration и возвращает тестовый PDF. При `LIVE_MODE=true` используется production transport, но mutating endpoints остаются fail-closed (`contract_verified=False`) до проверки DTO и contract-тестов в реальном кабинете.
 
 Повторный одинаковый intent того же чата возвращает сохранённую операцию. Terminal state не запускается повторно. Реальный transport не вызывает mutating endpoint, пока его контракт не помечен проверенным.
 

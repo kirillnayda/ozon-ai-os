@@ -5,8 +5,9 @@ from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Iterator
 import sqlite3
+import json
 
-from app.storage.models import DemandSnapshot, OperationState, StockSnapshot, SupplyOperation
+from app.storage.models import DemandSnapshot, OperationState, StockSnapshot, SupplyDialog, SupplyOperation
 
 
 class SQLiteStorage:
@@ -96,6 +97,23 @@ class SQLiteStorage:
         with self._connect() as connection:
             rows = connection.execute("SELECT * FROM supply_operations WHERE state NOT IN (?, ?, ?)", terminal).fetchall()
         return [self._operation(row) for row in rows]
+
+    def get_dialog(self, chat_id: int) -> SupplyDialog | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM supply_dialogs WHERE chat_id=?", (chat_id,)).fetchone()
+        return SupplyDialog(row["chat_id"], row["step"], json.loads(row["data_json"])) if row else None
+
+    def save_dialog(self, dialog: SupplyDialog) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO supply_dialogs(chat_id, step, data_json, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(chat_id) DO UPDATE SET step=excluded.step, data_json=excluded.data_json, updated_at=excluded.updated_at",
+                (dialog.chat_id, dialog.step, json.dumps(dialog.data, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
+            )
+
+    def delete_dialog(self, chat_id: int) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM supply_dialogs WHERE chat_id=?", (chat_id,))
 
     @staticmethod
     def _operation(row: sqlite3.Row) -> SupplyOperation:

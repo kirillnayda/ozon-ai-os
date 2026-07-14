@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, Sequence
 
-from app.storage.models import DemandSnapshot, StockSnapshot, SupplyOperation
+from app.storage.models import DemandSnapshot, StockSnapshot, SupplyDialog, SupplyOperation
 
 
 class SnapshotRepository(Protocol):
@@ -23,3 +23,8 @@ class OperationRepository(Protocol):
 class AuditRepository(Protocol):
     def record(self, actor: str, action: str, result: str, details: str = "") -> None: ...
 
+
+class SupplyDialogRepository(Protocol):
+    def get_dialog(self, chat_id: int) -> SupplyDialog | None: ...
+    def save_dialog(self, dialog: SupplyDialog) -> None: ...
+    def delete_dialog(self, chat_id: int) -> None: ...

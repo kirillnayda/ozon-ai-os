@@ -93,3 +93,30 @@ class MockTransport:
     async def close(self) -> None:
         return None
 
+
+class SupplyTestTransport:
+    """Deterministic offline contract double; never performs network I/O."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self._counter = 0
+
+    async def request(self, endpoint: Endpoint, payload: dict[str, Any], *, allow_mutation: bool = False) -> dict[str, Any]:
+        if endpoint.mutating and not allow_mutation:
+            raise PermissionError("Изменяющий тестовый запрос не разрешён")
+        self.calls.append((endpoint.path, payload))
+        self._counter += 1
+        if "label/get" in endpoint.path:
+            return {"status": "ready", "file_guid": "test-label"}
+        if endpoint.path.endswith("/create/info") or endpoint.path.endswith("/create/status"):
+            return {"status": "success", "supply_id": "test-supply"}
+        if endpoint.path.endswith("/create"):
+            return {"operation_id": f"test-operation-{self._counter}"}
+        return {"status": "success"}
+
+    async def download(self, endpoint: Endpoint) -> bytes:
+        self.calls.append((endpoint.path, {}))
+        return b"%PDF-1.7\n% Ozon AI OS test cargo label\n"
+
+    async def close(self) -> None:
+        return None

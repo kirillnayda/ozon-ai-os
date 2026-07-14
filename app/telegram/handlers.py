@@ -12,8 +12,9 @@ from app.storage.repositories import OperationRepository
 from app.supply.report import render_report
 from app.supply.service import SupplyManager
 from app.supplies.parser import parse_supply_intent
+from app.supplies.dialog import SupplyDialogService
 from app.supplies.service import SupplyWorkflow
-from app.telegram.keyboards import confirmation_keyboard, update_keyboard
+from app.telegram.keyboards import confirmation_keyboard, supply_menu, update_keyboard
 from app.updater.checker import GitHubReleaseChecker
 from app.updater.request import UpdateRequestWriter
 
@@ -27,9 +28,9 @@ class HandlerResult:
 
 
 class CommandHandlers:
-    def __init__(self, settings: Settings, ozon: OzonReadApi, supply: SupplyManager, workflow: SupplyWorkflow, operations: OperationRepository, updates: GitHubReleaseChecker, update_writer: UpdateRequestWriter) -> None:
+    def __init__(self, settings: Settings, ozon: OzonReadApi, supply: SupplyManager, workflow: SupplyWorkflow, dialogs: SupplyDialogService, operations: OperationRepository, updates: GitHubReleaseChecker, update_writer: UpdateRequestWriter) -> None:
         self.settings, self.ozon, self.supply, self.workflow = settings, ozon, supply, workflow
-        self.operations, self.updates, self.update_writer = operations, updates, update_writer
+        self.dialogs, self.operations, self.updates, self.update_writer = dialogs, operations, updates, update_writer
         self.started_at = datetime.now()
 
     def allowed(self, chat_id: int) -> bool:
@@ -42,6 +43,15 @@ class CommandHandlers:
         if not stripped:
             return HandlerResult("Пустое сообщение. Используйте /help")
         if not stripped.startswith("/"):
+            if self.dialogs.active(chat_id):
+                answer = self.dialogs.answer(chat_id, stripped)
+                return HandlerResult(answer.text, confirmation_keyboard(answer.operation.id) if answer.operation else None)
+            normalized = stripped.casefold()
+            if "созда" in normalized and "постав" in normalized:
+                return HandlerResult(self.dialogs.start(chat_id).text)
+            if ("предлож" in normalized or "рекомен" in normalized) and "постав" in normalized:
+                items = [x for group in self.supply.purchase_groups() for x in group]
+                return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", supply_menu())
             try:
                 intent = parse_supply_intent(stripped)
             except ValueError as exc:
@@ -55,7 +65,7 @@ class CommandHandlers:
 
         command = stripped.split(maxsplit=1)[0].split("@", 1)[0].lower()
         if command in {"/start", "/help"}:
-            return HandlerResult("<b>Ozon AI OS 1.0</b>\n/status /supply_report /critical_stock /purchase_plan /clusters /supplies /check_update /settings /ozon_test\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel")
+            return HandlerResult("<b>Ozon AI OS 1.0</b>\n/status /supplies /supply_status /supply_cancel /supply_test /supply_suggest /supply_report /critical_stock /purchase_plan /clusters /check_update /settings /ozon_test\n\nМожно написать: «Создать поставку» или «Предложи поставку».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
         if command == "/status":
             uptime = str(datetime.now() - self.started_at).split(".")[0]
             return HandlerResult(f"<b>Статус Ozon AI OS</b>\nСервер: <code>{html_escape(socket.gethostname())}</code>\nРаботает: {uptime}\nLIVE_MODE: {'включён' if self.settings.live_mode else 'выключен'}")
@@ -76,6 +86,21 @@ class CommandHandlers:
             clusters = data.get("clusters") or data.get("result") or []
             return HandlerResult("<b>Кластеры Ozon</b>\n" + "\n".join(html_escape(x.get("name") or x.get("cluster_name") or x) for x in clusters[:50]))
         if command == "/supplies":
+            return HandlerResult("<b>Менеджер FBO-поставок</b>\nВыберите действие.", supply_menu())
+        if command == "/supply_test":
+            if self.settings.live_mode:
+                return HandlerResult("Команда /supply_test доступна только при LIVE_MODE=false.")
+            return HandlerResult(self.dialogs.start(chat_id).text)
+        if command == "/supply_suggest":
+            items = [x for group in self.supply.purchase_groups() for x in group]
+            return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", supply_menu())
+        if command == "/supply_cancel":
+            parts = stripped.split(maxsplit=1)
+            if len(parts) == 1:
+                return HandlerResult(self.dialogs.cancel(chat_id).text)
+            operation = self.workflow.cancel(chat_id, parts[1].strip())
+            return HandlerResult(f"Поставка отменена · {html_escape(operation.id)}" if operation.state == OperationState.CANCELLED else f"Поставку уже нельзя отменить: {operation.state.value}")
+        if command == "/supply_status":
             rows = self.operations.unfinished()
             return HandlerResult("<b>Незавершённые поставки</b>\n" + ("\n".join(f"{html_escape(x.id)} · {x.state.value} · {html_escape(x.destination)}" for x in rows) or "Нет"))
         if command == "/check_update":
@@ -88,12 +113,27 @@ class CommandHandlers:
     async def callback(self, chat_id: int, data: str) -> HandlerResult | None:
         if not self.allowed(chat_id):
             return None
+        if data == "supply:start":
+            return HandlerResult(self.dialogs.start(chat_id).text)
+        if data == "supply:suggest":
+            items = [x for group in self.supply.purchase_groups() for x in group]
+            return HandlerResult(render_report(items) if items else "Недостаточно данных о продажах и остатках для рекомендации.", supply_menu())
+        if data == "supply:status":
+            rows = self.operations.unfinished()
+            return HandlerResult("<b>Незавершённые поставки</b>\n" + ("\n".join(f"{html_escape(x.id)} · {x.state.value} · {html_escape(x.destination)}" for x in rows) or "Нет"))
         parts = data.split(":", 2)
         if len(parts) == 3 and parts[:2] == ["supply", "confirm"]:
-            operation = await self.workflow.confirm(chat_id, parts[2])
-            operation, pdf = await self.workflow.create_cargoes_and_labels_mockable(chat_id, operation.id)
+            try:
+                operation = await self.workflow.confirm(chat_id, parts[2])
+                if operation.state != OperationState.SUPPLY_CREATED:
+                    return HandlerResult(f"Поставка уже обработана: {operation.state.value} · {html_escape(operation.id)}")
+                operation, pdf = await self.workflow.create_cargoes_and_labels_mockable(chat_id, operation.id)
+            except TimeoutError:
+                return HandlerResult("Ozon не завершил операцию вовремя. Поставка отмечена как failed; повторный запрос не отправлен.")
+            except Exception as exc:
+                return HandlerResult(f"Не удалось обработать поставку ({html_escape(type(exc).__name__)}). Детали внешнего ответа не сохранены.")
             return HandlerResult(
-                f"Поставка: {operation.state.value} · {html_escape(operation.id)}",
+                ("🧪 Тестовая поставка завершена" if not self.settings.live_mode else "Поставка завершена") + f" · {html_escape(operation.id)}",
                 document_name=f"ozon-cargo-labels-{operation.id}.pdf" if pdf else None,
                 document=pdf,
             )

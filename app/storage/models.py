@@ -3,16 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 
 class OperationState(StrEnum):
-    DRAFT = "draft"
+    DRAFT_CREATED = "draft_created"
+    DRAFT = "draft_created"
     AWAITING_CONFIRMATION = "awaiting_confirmation"
-    CONFIRMED = "confirmed"
     CREATING = "creating"
-    CREATED = "created"
-    CARGOES_CREATING = "cargoes_creating"
-    LABELS_CREATING = "labels_creating"
+    WAITING_FOR_OZON = "waiting_for_ozon"
+    SUPPLY_CREATED = "supply_created"
+    CREATED = "supply_created"
+    CARGOES_CREATING = "waiting_for_ozon"
+    LABELS_REQUESTED = "labels_requested"
+    LABELS_CREATING = "labels_requested"
     LABELS_READY = "labels_ready"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
@@ -52,3 +56,10 @@ class SupplyOperation:
     payload_json: str
     external_id: str | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class SupplyDialog:
+    chat_id: int
+    step: str
+    data: dict[str, Any]
