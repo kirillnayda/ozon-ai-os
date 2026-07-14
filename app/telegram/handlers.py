@@ -86,7 +86,10 @@ class CommandHandlers:
 
         command = stripped.split(maxsplit=1)[0].split("@", 1)[0].lower()
         if command in {"/start", "/help"}:
-            return HandlerResult("<b>Ozon AI OS 1.1</b>\n/status /supplies /stocks /stocks_sync /cluster_report /stock_alerts /supply_status /supply_history /supply_metrics /supply_test /supply_suggest /update /settings\n\nМожно написать: «Создать поставку», «Предложи поставку», «Покажи остатки».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
+            return HandlerResult("<b>Ozon AI OS 1.1</b>\n/status /version /supplies /stocks /stocks_sync /cluster_report /stock_alerts /supply_status /supply_history /supply_metrics /supply_test /supply_suggest /update /settings\n\nМожно написать: «Создать поставку», «Предложи поставку», «Покажи остатки».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
+        if command == "/version":
+            mode = "LIVE" if self.settings.live_mode else "TEST"
+            return HandlerResult(f"<b>Ozon AI OS</b>\nВерсия: <code>{html_escape(self.settings.current_version)}</code>\nРежим: {mode}")
         if command == "/status":
             uptime = str(datetime.now() - self.started_at).split(".")[0]
             return HandlerResult(f"<b>Статус Ozon AI OS</b>\nСервер: <code>{html_escape(socket.gethostname())}</code>\nРаботает: {uptime}\nLIVE_MODE: {'включён' if self.settings.live_mode else 'выключен'}")

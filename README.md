@@ -16,7 +16,7 @@ python3 -m venv .venv
 
 ## Команды
 
-- `/status`, `/settings`, `/ozon_test` — совместимые команды Foundation;
+- `/status`, `/version`, `/settings`, `/ozon_test` — состояние, версия и проверка подключения;
 - `/supply_report`, `/critical_stock`, `/purchase_plan`, `/supply_suggest` — анализ среднесуточных продаж и рекомендации;
 - `/supplies`, `/supply_test`, `/supply_status`, `/supply_history`, `/supply_metrics`, `/supply_cancel` — пошаговый менеджер FBO-поставок;
 - `/supply_edit ID SKU QTY BOX` и `/supply_remove ID SKU` — корректировка до подтверждения;

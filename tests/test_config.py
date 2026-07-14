@@ -18,7 +18,9 @@ BASE = {
 class ConfigTest(unittest.TestCase):
     def test_live_mode_defaults_to_false(self):
         with patch.dict("os.environ", BASE, clear=True):
-            self.assertFalse(load_settings(Path("missing.env")).live_mode)
+            settings = load_settings(Path("missing.env"))
+            self.assertFalse(settings.live_mode)
+            self.assertEqual(settings.current_version, "1.1.2")
 
     def test_invalid_boolean_is_rejected(self):
         with patch.dict("os.environ", {**BASE, "LIVE_MODE": "yes"}, clear=True):
