@@ -7,9 +7,11 @@ REQUEST_DIR=/run/ozon-ai-os/update-requests
 BACKUP_DIR=/var/backups/ozon-ai-os
 SERVICE=ozon-ai-os.service
 REPOSITORY_FILE=/etc/ozon-ai-os/repository
+ALLOWED_SIGNERS_FILE=/etc/ozon-ai-os/allowed_signers
 
 [[ "${EUID}" -eq 0 ]] || exit 77
 [[ -r "${REPOSITORY_FILE}" ]] || exit 78
+[[ -r "${ALLOWED_SIGNERS_FILE}" ]] || exit 78
 REPOSITORY="$(<"${REPOSITORY_FILE}")"
 [[ "${REPOSITORY}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$ ]] || exit 78
 
@@ -33,7 +35,7 @@ rollback() {
 trap rollback ERR
 
 git -C "${APP_DIR}" fetch --tags --force "${REPOSITORY}"
-git -C "${APP_DIR}" verify-tag "${VERSION}"
+git -C "${APP_DIR}" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS_FILE}" verify-tag "${VERSION}"
 git -C "${APP_DIR}" checkout --detach "${VERSION}"
 "${APP_DIR}/venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
 "${APP_DIR}/venv/bin/python" "${APP_DIR}/scripts/check.py"

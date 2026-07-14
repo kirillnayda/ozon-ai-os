@@ -5,6 +5,7 @@ from datetime import datetime
 import socket
 
 from app.config import Settings
+from app.inventory.service import InventoryService
 from app.core.security import html_escape
 from app.ozon.read_api import OzonReadApi
 from app.storage.models import OperationState
@@ -41,9 +42,10 @@ class CommandHandlers:
         OperationState.CANCELLED: "Отменено",
         OperationState.FAILED: "Требуется внимание",
     }
-    def __init__(self, settings: Settings, ozon: OzonReadApi, supply: SupplyManager, workflow: SupplyWorkflow, dialogs: SupplyDialogService, operations: OperationRepository, updates: GitHubReleaseChecker, update_writer: UpdateRequestWriter) -> None:
+    def __init__(self, settings: Settings, ozon: OzonReadApi, supply: SupplyManager, workflow: SupplyWorkflow, dialogs: SupplyDialogService, operations: OperationRepository, updates: GitHubReleaseChecker, update_writer: UpdateRequestWriter, inventory: InventoryService | None = None) -> None:
         self.settings, self.ozon, self.supply, self.workflow = settings, ozon, supply, workflow
         self.dialogs, self.operations, self.updates, self.update_writer = dialogs, operations, updates, update_writer
+        self.inventory = inventory
         self.started_at = datetime.now()
 
     def allowed(self, chat_id: int) -> bool:
@@ -69,6 +71,8 @@ class CommandHandlers:
                 return self._history(chat_id)
             if "статус" in normalized and "постав" in normalized:
                 return self._status()
+            if "остат" in normalized:
+                return self._inventory_report()
             try:
                 intent = parse_supply_intent(stripped)
             except ValueError as exc:
@@ -82,7 +86,7 @@ class CommandHandlers:
 
         command = stripped.split(maxsplit=1)[0].split("@", 1)[0].lower()
         if command in {"/start", "/help"}:
-            return HandlerResult("<b>Ozon AI OS 1.0</b>\n/status /supplies /supply_status /supply_history /supply_metrics /supply_cancel /supply_test /supply_suggest /supply_edit /supply_remove /update /settings\n\nМожно написать: «Создать поставку», «Предложи поставку», «История поставок».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
+            return HandlerResult("<b>Ozon AI OS 1.1</b>\n/status /supplies /stocks /stocks_sync /cluster_report /stock_alerts /supply_status /supply_history /supply_metrics /supply_test /supply_suggest /update /settings\n\nМожно написать: «Создать поставку», «Предложи поставку», «Покажи остатки».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
         if command == "/status":
             uptime = str(datetime.now() - self.started_at).split(".")[0]
             return HandlerResult(f"<b>Статус Ozon AI OS</b>\nСервер: <code>{html_escape(socket.gethostname())}</code>\nРаботает: {uptime}\nLIVE_MODE: {'включён' if self.settings.live_mode else 'выключен'}")
@@ -102,6 +106,19 @@ class CommandHandlers:
             data = await self.ozon.clusters()
             clusters = data.get("clusters") or data.get("result") or []
             return HandlerResult("<b>Кластеры Ozon</b>\n" + "\n".join(html_escape(x.get("name") or x.get("cluster_name") or x) for x in clusters[:50]))
+        if command in {"/stocks", "/cluster_report"}:
+            return self._inventory_report()
+        if command == "/stock_alerts":
+            items = [item for item in self.supply.recommendations() if item.level.value in {"critical", "low"}]
+            return HandlerResult(render_report(items) if items else "Критичных остатков нет.")
+        if command == "/stocks_sync":
+            if not self.inventory:
+                return HandlerResult("Сервис остатков не настроен.")
+            try:
+                stocks, demand = await self.inventory.sync(str(chat_id))
+            except Exception as exc:
+                return HandlerResult(f"Синхронизация заблокирована ({html_escape(type(exc).__name__)}). Внешний ответ не сохранён.")
+            return HandlerResult(f"Остатки синхронизированы: {stocks}; срезов спроса: {demand}.")
         if command == "/supplies":
             return HandlerResult("<b>Менеджер FBO-поставок</b>\nВыберите действие.", supply_menu())
         if command == "/supply_test":
@@ -163,6 +180,8 @@ class CommandHandlers:
             return self._history(chat_id)
         if data == "system:update":
             return await self.message(chat_id, "/update")
+        if data == "inventory:clusters":
+            return self._inventory_report()
         parts = data.split(":", 2)
         if len(parts) == 3 and parts[:2] == ["supply", "recommend"]:
             try:
@@ -214,3 +233,15 @@ class CommandHandlers:
     def _history(self, chat_id: int) -> HandlerResult:
         rows = self.operations.history(chat_id)
         return HandlerResult("<b>История поставок</b>\n" + ("\n".join(f"{html_escape(x.id)} · {self.STATE_LABELS[x.state]} · {html_escape(x.destination)}" for x in rows) or "История пуста"))
+
+    def _inventory_report(self) -> HandlerResult:
+        if not self.inventory:
+            return HandlerResult("Сервис остатков не настроен.")
+        rows = self.inventory.clusters()
+        if not rows:
+            return HandlerResult("Остатки ещё не синхронизированы. Используйте /stocks_sync.")
+        lines = ["<b>FBO-остатки по кластерам</b>"]
+        lines.extend(f"{html_escape(row.cluster_name)}: доступно {row.available}, резерв {row.reserved}, товаров {row.offers}" for row in rows)
+        if self.inventory.stale():
+            lines.append("\n⚠️ Данные устарели — выполните /stocks_sync.")
+        return HandlerResult("\n".join(lines))

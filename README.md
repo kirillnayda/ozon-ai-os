@@ -1,4 +1,4 @@
-# Ozon AI OS 1.0
+# Ozon AI OS 1.1
 
 Серверная система управления магазином Ozon через Telegram. Первый релиз включает read-only FBO Supply Manager, безопасный workflow поставок, проверку обновлений и SQLite-аудит.
 
@@ -21,6 +21,7 @@ python3 -m venv .venv
 - `/supplies`, `/supply_test`, `/supply_status`, `/supply_history`, `/supply_metrics`, `/supply_cancel` — пошаговый менеджер FBO-поставок;
 - `/supply_edit ID SKU QTY BOX` и `/supply_remove ID SKU` — корректировка до подтверждения;
 - `/update` — проверка GitHub Release и безопасный запрос обновления;
+- `/stocks`, `/stocks_sync`, `/cluster_report`, `/stock_alerts` — FBO-остатки и контроль дефицита по кластерам;
 - `/clusters`, `/supplies` — Ozon FBO;
 - `/check_update` — GitHub releases.
 

@@ -15,6 +15,8 @@ from app.database import DB_PATH
 from app.developer_agent.report_builder import build_task_report
 from app.developer_agent.task_repository import SQLiteDeveloperTaskRepository
 from app.developer_agent.telegram_handlers import DeveloperAgentTelegramHandlers, task_keyboard
+from app.inventory.gateway import MockInventoryGateway, UnverifiedOzonInventoryGateway
+from app.inventory.service import InventoryService
 from app.ozon.read_api import OzonReadApi
 from app.ozon.transport import OzonHttpTransport, SupplyTestTransport
 from app.storage.sqlite import SQLiteStorage
@@ -43,7 +45,9 @@ class Application:
         catalog = SnapshotProductCatalog(self.storage, ("TEST-SKU",) if not self.settings.live_mode else ())
         planning = UnverifiedOzonSupplyPlanningGateway() if self.settings.live_mode else MockSupplyPlanningGateway()
         dialogs = SupplyDialogService(self.storage, catalog, workflow, test_mode=not self.settings.live_mode, planning=planning)
-        self.handlers = CommandHandlers(self.settings, self.ozon, supply, workflow, dialogs, self.storage, GitHubReleaseChecker(self.settings.github_repository, self.settings.current_version), UpdateRequestWriter())
+        inventory_gateway = UnverifiedOzonInventoryGateway() if self.settings.live_mode else MockInventoryGateway()
+        self.inventory = InventoryService(inventory_gateway, self.storage, self.storage)
+        self.handlers = CommandHandlers(self.settings, self.ozon, supply, workflow, dialogs, self.storage, GitHubReleaseChecker(self.settings.github_repository, self.settings.current_version), UpdateRequestWriter(), self.inventory)
         configured_developer_db = Path(os.getenv("DEVELOPER_AGENT_DB_PATH", str(DB_PATH.with_name("developer_tasks.sqlite3"))))
         developer_db = configured_developer_db if configured_developer_db.parent.exists() else DB_PATH.with_name("developer_tasks.sqlite3")
         self.developer_repository = SQLiteDeveloperTaskRepository(developer_db)
@@ -62,6 +66,8 @@ class Application:
         await self.telegram.delete_webhook()
         self.scheduler.every(300, self._recover_supply_operations, "ozon-operations")
         self.scheduler.every(60, self._deliver_pdf_outbox, "supply-pdf-outbox")
+        if not self.settings.live_mode:
+            self.scheduler.every(900, self.inventory.sync, "inventory-sync")
         self.scheduler.every(self.settings.update_check_minutes * 60, self._background_update_check, "updates")
         self.scheduler.every(5, self._developer_reports, "developer-reports")
         self.scheduler.daily(self.settings.report_hour, self.settings.timezone, self._morning_report, "morning-report")

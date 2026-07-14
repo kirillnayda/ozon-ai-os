@@ -20,8 +20,9 @@
 
 1. Установить `scripts/ozon-ai-os-updater` как `/usr/local/sbin/ozon-ai-os-updater`, owner `root:root`, mode `0750`.
 2. Создать `/etc/ozon-ai-os/repository`, owner `root:root`, mode `0644`, с единственной строкой `https://github.com/OWNER/REPO.git`.
-3. Установить units из `deploy/`, выполнить `systemctl daemon-reload` и `systemctl enable --now ozon-ai-os-updater.path`.
-4. Каталог `/run/ozon-ai-os/update-requests` должен быть доступен на запись только `ozonai`, но units и updater — только root.
+3. Создать `/etc/ozon-ai-os/allowed_signers`, owner `root:root`, mode `0644`. Добавить email release-maintainer и его SSH signing public key в формате `allowed_signers` из `deploy/allowed_signers.example`.
+4. Установить units из `deploy/`, выполнить `systemctl daemon-reload` и `systemctl enable --now ozon-ai-os-updater.path`.
+5. Каталог `/run/ozon-ai-os/update-requests` должен быть доступен на запись только `ozonai`, но units и updater — только root.
 
 Updater доверяет только подписанным тегам. Ключи доверенных release maintainers настраиваются root отдельно.
 

@@ -11,6 +11,7 @@ def supply_menu() -> dict:
         [{"text": "Предложить по продажам", "callback_data": "supply:suggest"}],
         [{"text": "Статус поставок", "callback_data": "supply:status"}],
         [{"text": "История и метрики", "callback_data": "supply:history"}],
+        [{"text": "Остатки по кластерам", "callback_data": "inventory:clusters"}],
         [{"text": "Проверить обновление", "callback_data": "system:update"}],
     ]}
 
