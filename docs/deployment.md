@@ -10,11 +10,21 @@
 
 ## Первичная установка
 
+На новом Ubuntu-сервере достаточно скачать `bootstrap.sh` из доверенного репозитория и запустить:
+
+```bash
+sudo bash bootstrap.sh
+```
+
+Bootstrap выбирает последний semver-тег, проверяет его SSH-подпись встроенным публичным ключом релизов и только затем запускает установщик. Система, virtualenv, systemd units, updater, доверенный repository и безопасный `LIVE_MODE=false` настраиваются автоматически. Инсталлятор запрашивает только секреты Telegram/Ozon, которые невозможно безопасно определить автоматически.
+
 1. Проверить код: `python3 scripts/check.py`.
 2. Запустить `sudo bash install.sh` из корня checkout.
 3. Заполнить `/opt/ozon-ai-os/.env` по `.env.example` и оставить `LIVE_MODE=false`.
 4. Проверить `systemctl status ozon-ai-os` и `journalctl -u ozon-ai-os`.
 5. В Telegram проверить `/status`, `/settings`, `/ozon_test`.
+
+После обновления бот сам отправляет в разрешённый чат сообщение об успехе или автоматическом откате.
 
 ## Updater
 

@@ -6,6 +6,8 @@
 
 ## Быстрый старт
 
+Новый Ubuntu-сервер: `sudo bash bootstrap.sh`. Скрипт проверит подпись release-тега и автоматически установит systemd-сервис и Telegram-updater. Потребуется ввести только Telegram/Ozon credentials; `LIVE_MODE=false` сохраняется по умолчанию.
+
 ```bash
 cp .env.example .env
 python3 -m venv .venv

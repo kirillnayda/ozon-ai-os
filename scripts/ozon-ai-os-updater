@@ -8,6 +8,8 @@ BACKUP_DIR=/var/backups/ozon-ai-os
 SERVICE=ozon-ai-os.service
 REPOSITORY_FILE=/etc/ozon-ai-os/repository
 ALLOWED_SIGNERS_FILE=/etc/ozon-ai-os/allowed_signers
+ENV_FILE="${APP_DIR}/.env"
+STATUS_FILE=/run/ozon-ai-os/update-status
 
 [[ "${EUID}" -eq 0 ]] || exit 77
 [[ -r "${REPOSITORY_FILE}" ]] || exit 78
@@ -18,6 +20,14 @@ REPOSITORY="$(<"${REPOSITORY_FILE}")"
 REQUEST="$(find "${REQUEST_DIR}" -maxdepth 1 -type f -name '*.json' -print -quit)"
 [[ -n "${REQUEST}" ]] || exit 0
 VERSION="$(python3 -c 'import json,re,sys; v=str(json.load(open(sys.argv[1], encoding="utf-8"))["version"]); assert re.fullmatch(r"v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?",v); print(v)' "${REQUEST}")"
+CHAT_ID="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1], encoding="utf-8"))["chat_id"]; assert isinstance(v,int); print(v)' "${REQUEST}")"
+ALLOWED_CHAT_ID="$(sed -n 's/^TELEGRAM_CHAT_ID=//p' "${ENV_FILE}" | tail -n 1 | tr -d '"[:space:]')"
+[[ "${CHAT_ID}" == "${ALLOWED_CHAT_ID}" ]] || exit 77
+
+notify() {
+  local message="$1"
+  "${APP_DIR}/venv/bin/python" -m app.updater.notify "${CHAT_ID}" "${message}" >/dev/null 2>&1 || true
+}
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="${BACKUP_DIR}/${STAMP}"
@@ -29,17 +39,30 @@ git -C "${APP_DIR}" bundle create "${BACKUP}/source.bundle" HEAD
 
 rollback() {
   git -C "${APP_DIR}" reset --hard "${PREVIOUS}" || true
+  cp "${BACKUP}/.env" "${ENV_FILE}" || true
   cp "${BACKUP}/ozon_ai_os.sqlite3" "${APP_DIR}/data/ozon_ai_os.sqlite3" || true
   systemctl restart "${SERVICE}" || true
+  printf 'failed %s\n' "${VERSION}" > "${STATUS_FILE}"
+  notify "❌ Обновление ${VERSION} не установлено. Выполнен автоматический откат."
 }
 trap rollback ERR
+
+printf 'installing %s\n' "${VERSION}" > "${STATUS_FILE}"
+notify "⏳ Начинаю установку ${VERSION}. Бот будет перезапущен."
 
 git -C "${APP_DIR}" fetch --tags --force "${REPOSITORY}"
 git -C "${APP_DIR}" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS_FILE}" verify-tag "${VERSION}"
 git -C "${APP_DIR}" checkout --detach "${VERSION}"
+sed -i "s/^CURRENT_VERSION=.*/CURRENT_VERSION=${VERSION#v}/" "${ENV_FILE}"
 "${APP_DIR}/venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
 "${APP_DIR}/venv/bin/python" "${APP_DIR}/scripts/check.py"
 systemctl restart "${SERVICE}"
 systemctl is-active --quiet "${SERVICE}"
+install -o root -g root -m 0750 "${APP_DIR}/scripts/ozon-ai-os-updater" /usr/local/sbin/ozon-ai-os-updater
+install -o root -g root -m 0644 "${APP_DIR}/deploy/ozon-ai-os-updater.service" /etc/systemd/system/
+install -o root -g root -m 0644 "${APP_DIR}/deploy/ozon-ai-os-updater.path" /etc/systemd/system/
+systemctl daemon-reload
 rm -f -- "${REQUEST}"
+printf 'installed %s\n' "${VERSION}" > "${STATUS_FILE}"
+notify "✅ Обновление ${VERSION} установлено, проверки пройдены."
 trap - ERR

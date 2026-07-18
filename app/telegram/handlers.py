@@ -218,6 +218,9 @@ class CommandHandlers:
                 return HandlerResult(f"Поставка отменена · {html_escape(operation.id)}")
             return HandlerResult(f"Поставку уже нельзя отменить: {operation.state.value} · {html_escape(operation.id)}")
         if len(parts) == 3 and parts[:2] == ["update", "apply"]:
+            release = await self.updates.check()
+            if not release or release.version != parts[2]:
+                return HandlerResult("Запрос обновления устарел. Выполните /update ещё раз.")
             self.update_writer.create(parts[2], chat_id)
             return HandlerResult(f"Обновление {html_escape(parts[2])} передано безопасному updater.")
         if len(parts) == 3 and parts[:2] == ["update", "details"]:

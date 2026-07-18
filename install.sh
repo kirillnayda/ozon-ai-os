@@ -6,6 +6,7 @@ APP_DIR=/opt/ozon-ai-os
 APP_USER=ozonai
 SERVICE=ozon-ai-os
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPOSITORY_URL="${REPOSITORY_URL:-https://github.com/kirillnayda/ozon-ai-os.git}"
 
 [[ "${EUID}" -eq 0 ]] || { echo "Запустите: sudo bash install.sh"; exit 1; }
 
@@ -15,7 +16,7 @@ id "${APP_USER}" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$
 install -d -o "${APP_USER}" -g "${APP_USER}" -m 0750 "${APP_DIR}" "${APP_DIR}/data" "${APP_DIR}/logs"
 
 rsync -a --delete \
-  --exclude .git --exclude .env --exclude .venv --exclude venv \
+  --exclude .env --exclude .venv --exclude venv \
   --exclude data --exclude logs --exclude backups \
   "${SOURCE_DIR}/" "${APP_DIR}/"
 
@@ -38,10 +39,14 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     printf 'OZON_CLIENT_ID="%s"\n' "${OZON_CLIENT_ID//\"/\\\"}"
     printf 'OZON_API_KEY="%s"\n' "${OZON_API_KEY//\"/\\\"}"
     sed -n '/^LIVE_MODE=/,$p' "${APP_DIR}/.env.example"
+    printf 'GITHUB_REPOSITORY=%s\n' "${REPOSITORY_URL#https://github.com/}" | sed 's/\.git$//'
+    printf 'CURRENT_VERSION=%s\n' "$(git -C "${APP_DIR}" describe --tags --exact-match HEAD | sed 's/^v//')"
   } > "${ENV_FILE}"
 fi
 
-chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
+chown -R root:root "${APP_DIR}"
+chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}/data" "${APP_DIR}/logs"
+chown "${APP_USER}:${APP_USER}" "${ENV_FILE}"
 chmod 0600 "${ENV_FILE}"
 
 install -o root -g root -m 0750 "${APP_DIR}/scripts/ozon-ai-os-updater" /usr/local/sbin/ozon-ai-os-updater
@@ -49,6 +54,8 @@ install -o root -g root -m 0644 "${APP_DIR}/deploy/ozon-ai-os-updater.service" /
 install -o root -g root -m 0644 "${APP_DIR}/deploy/ozon-ai-os-updater.path" /etc/systemd/system/
 install -d -o root -g root -m 0755 /etc/ozon-ai-os /run/ozon-ai-os
 install -d -o "${APP_USER}" -g "${APP_USER}" -m 0700 /run/ozon-ai-os/update-requests
+printf '%s\n' "${REPOSITORY_URL}" > /etc/ozon-ai-os/repository
+install -o root -g root -m 0644 "${APP_DIR}/deploy/allowed_signers.example" /etc/ozon-ai-os/allowed_signers
 
 cat > "/etc/systemd/system/${SERVICE}.service" <<EOF
 [Unit]
@@ -62,6 +69,7 @@ User=${APP_USER}
 Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${ENV_FILE}
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=${APP_DIR}/venv/bin/python -m app.main
 Restart=on-failure
 RestartSec=5
@@ -84,3 +92,4 @@ EOF
 systemctl daemon-reload
 systemctl enable --now "${SERVICE}.service" "ozon-ai-os-updater.path"
 systemctl --no-pager --full status "${SERVICE}.service"
+echo "Установка завершена. Напишите боту /status, затем /update. LIVE_MODE=false."
