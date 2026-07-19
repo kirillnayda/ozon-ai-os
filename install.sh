@@ -44,7 +44,8 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   } > "${ENV_FILE}"
 fi
 
-chown -R root:root "${APP_DIR}"
+chown -R root:"${APP_USER}" "${APP_DIR}"
+chmod 0750 "${APP_DIR}"
 chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}/data" "${APP_DIR}/logs"
 chown "${APP_USER}:${APP_USER}" "${ENV_FILE}"
 chmod 0600 "${ENV_FILE}"
