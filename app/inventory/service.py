@@ -17,6 +17,21 @@ class ClusterInventory:
     available: int
 
 
+@dataclass(frozen=True)
+class ProductInventory:
+    sku: int
+    offer_id: str
+    available: int
+
+
+@dataclass(frozen=True)
+class ProductClusterInventory:
+    cluster_id: int
+    cluster_name: str
+    available: int
+    daily_sales: float
+
+
 class InventoryService:
     def __init__(self, gateway: InventoryGateway, snapshots: SnapshotRepository, audit: AuditRepository) -> None:
         self.gateway, self.snapshots, self.audit = gateway, snapshots, audit
@@ -46,6 +61,33 @@ class InventoryService:
             item["present"] += row.present  # type: ignore[operator]
             item["reserved"] += row.reserved  # type: ignore[operator]
         return [ClusterInventory(cluster_id, name, len(values["offers"]), int(values["present"]), int(values["reserved"]), max(0, int(values["present"]) - int(values["reserved"]))) for (cluster_id, name), values in sorted(grouped.items())]
+
+    def products(self) -> list[ProductInventory]:
+        grouped: dict[tuple[int, str], int] = {}
+        for row in self.snapshots.latest_stocks():
+            key = (row.sku, row.offer_id)
+            grouped[key] = grouped.get(key, 0) + max(0, row.present - row.reserved)
+        return [
+            ProductInventory(sku, offer_id, available)
+            for (sku, offer_id), available in sorted(grouped.items(), key=lambda item: item[0][1].casefold())
+            if available > 0
+        ]
+
+    def product_clusters(self, sku: int) -> list[ProductClusterInventory]:
+        stocks: dict[tuple[int, str], int] = {}
+        for row in self.snapshots.latest_stocks():
+            if row.sku == sku:
+                key = (row.cluster_id, row.cluster_name)
+                stocks[key] = stocks.get(key, 0) + max(0, row.present - row.reserved)
+        demand: dict[int, float] = {}
+        for row in self.snapshots.latest_demand():
+            if row.sku == sku and row.period_days > 0:
+                demand[row.cluster_id] = demand.get(row.cluster_id, 0.0) + row.units / row.period_days
+        return [
+            ProductClusterInventory(cluster_id, name, available, demand.get(cluster_id, 0.0))
+            for (cluster_id, name), available in sorted(stocks.items(), key=lambda item: item[0][1].casefold())
+            if available > 0
+        ]
 
     def stale(self, max_age_seconds: int = 3600) -> bool:
         stocks = self.snapshots.latest_stocks()

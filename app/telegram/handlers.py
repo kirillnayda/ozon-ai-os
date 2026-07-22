@@ -6,6 +6,7 @@ import socket
 
 from app.config import Settings
 from app.inventory.service import InventoryService
+from app.inventory.contract_probe import OzonContractProbe
 from app.core.security import html_escape
 from app.ozon.read_api import OzonReadApi
 from app.storage.models import OperationState
@@ -15,7 +16,7 @@ from app.supply.service import SupplyManager
 from app.supplies.parser import parse_supply_intent
 from app.supplies.dialog import SupplyDialogService
 from app.supplies.service import SupplyWorkflow
-from app.telegram.keyboards import confirmation_keyboard, recommendation_keyboard, supply_menu, update_keyboard
+from app.telegram.keyboards import back_to_menu_keyboard, confirmation_keyboard, inventory_product_keyboard, inventory_products_keyboard, recommendation_keyboard, supply_menu, update_keyboard
 from app.updater.checker import GitHubReleaseChecker
 from app.updater.request import UpdateRequestWriter
 
@@ -86,7 +87,7 @@ class CommandHandlers:
 
         command = stripped.split(maxsplit=1)[0].split("@", 1)[0].lower()
         if command in {"/start", "/help"}:
-            return HandlerResult("<b>Ozon AI OS 1.1</b>\n/status /version /supplies /stocks /stocks_sync /cluster_report /stock_alerts /supply_status /supply_history /supply_metrics /supply_test /supply_suggest /update /settings\n\nМожно написать: «Создать поставку», «Предложи поставку», «Покажи остатки».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
+            return HandlerResult("<b>Ozon AI OS 1.1</b>\n/status /version /supplies /stocks /stocks_sync /ozon_contracts /cluster_report /stock_alerts /supply_status /supply_history /supply_metrics /supply_test /supply_suggest /update /settings\n\nМожно написать: «Создать поставку», «Предложи поставку», «Покажи остатки».\n\nDeveloper Agent: /dev /dev_status /dev_queue /dev_plan /dev_cancel", supply_menu())
         if command == "/version":
             mode = "LIVE" if self.settings.live_mode else "TEST"
             return HandlerResult(f"<b>Ozon AI OS</b>\nВерсия: <code>{html_escape(self.settings.current_version)}</code>\nРежим: {mode}")
@@ -122,6 +123,8 @@ class CommandHandlers:
             except Exception as exc:
                 return HandlerResult(f"Синхронизация заблокирована ({html_escape(type(exc).__name__)}). Внешний ответ не сохранён.")
             return HandlerResult(f"Остатки синхронизированы: {stocks}; срезов спроса: {demand}.")
+        if command == "/ozon_contracts":
+            return await self._ozon_contracts()
         if command == "/supplies":
             return HandlerResult("<b>Менеджер FBO-поставок</b>\nВыберите действие.", supply_menu())
         if command == "/supply_test":
@@ -183,8 +186,25 @@ class CommandHandlers:
             return self._history(chat_id)
         if data == "system:update":
             return await self.message(chat_id, "/update")
+        if data == "menu:main":
+            return HandlerResult("<b>Главное меню Ozon AI OS</b>\nВыберите действие.", supply_menu())
         if data == "inventory:clusters":
-            return self._inventory_report()
+            return self._inventory_products(0)
+        if data == "inventory:contracts":
+            return await self._ozon_contracts()
+        inventory_parts = data.split(":")
+        if len(inventory_parts) == 3 and inventory_parts[:2] == ["inventory", "page"]:
+            try:
+                page = int(inventory_parts[2])
+            except ValueError:
+                return HandlerResult("Некорректная страница.", back_to_menu_keyboard())
+            return self._inventory_products(page)
+        if len(inventory_parts) == 4 and inventory_parts[:2] == ["inventory", "product"]:
+            try:
+                sku, page = int(inventory_parts[2]), int(inventory_parts[3])
+            except ValueError:
+                return HandlerResult("Некорректный товар.", back_to_menu_keyboard())
+            return self._inventory_product(sku, page)
         parts = data.split(":", 2)
         if len(parts) == 3 and parts[:2] == ["supply", "recommend"]:
             try:
@@ -234,11 +254,11 @@ class CommandHandlers:
 
     def _status(self) -> HandlerResult:
         rows = self.operations.unfinished()
-        return HandlerResult("<b>Активные поставки</b>\n" + ("\n".join(f"{html_escape(x.id)} · {self.STATE_LABELS[x.state]} · {html_escape(x.destination)}" for x in rows) or "Нет"))
+        return HandlerResult("<b>Активные поставки</b>\n" + ("\n".join(f"{html_escape(x.id)} · {self.STATE_LABELS[x.state]} · {html_escape(x.destination)}" for x in rows) or "Нет"), back_to_menu_keyboard())
 
     def _history(self, chat_id: int) -> HandlerResult:
         rows = self.operations.history(chat_id)
-        return HandlerResult("<b>История поставок</b>\n" + ("\n".join(f"{html_escape(x.id)} · {self.STATE_LABELS[x.state]} · {html_escape(x.destination)}" for x in rows) or "История пуста"))
+        return HandlerResult("<b>История поставок</b>\n" + ("\n".join(f"{html_escape(x.id)} · {self.STATE_LABELS[x.state]} · {html_escape(x.destination)}" for x in rows) or "История пуста"), back_to_menu_keyboard())
 
     def _inventory_report(self) -> HandlerResult:
         if not self.inventory:
@@ -250,4 +270,41 @@ class CommandHandlers:
         lines.extend(f"{html_escape(row.cluster_name)}: доступно {row.available}, резерв {row.reserved}, товаров {row.offers}" for row in rows)
         if self.inventory.stale():
             lines.append("\n⚠️ Данные устарели — выполните /stocks_sync.")
-        return HandlerResult("\n".join(lines))
+        return HandlerResult("\n".join(lines), back_to_menu_keyboard())
+
+    def _inventory_products(self, page: int, page_size: int = 8) -> HandlerResult:
+        if not self.inventory:
+            return HandlerResult("Сервис остатков не настроен.", back_to_menu_keyboard())
+        products = self.inventory.products()
+        if not products:
+            return HandlerResult("На складах нет синхронизированных товаров. Используйте /stocks_sync.", back_to_menu_keyboard())
+        pages = (len(products) + page_size - 1) // page_size
+        page = min(max(0, page), pages - 1)
+        visible = products[page * page_size:(page + 1) * page_size]
+        text = f"<b>Остатки по кластерам</b>\nВыберите товар · страница {page + 1}/{pages}"
+        if self.inventory.stale():
+            text += "\n\n⚠️ Данные устарели — выполните /stocks_sync."
+        return HandlerResult(text, inventory_products_keyboard([(row.sku, row.offer_id) for row in visible], page, pages))
+
+    def _inventory_product(self, sku: int, page: int) -> HandlerResult:
+        if not self.inventory:
+            return HandlerResult("Сервис остатков не настроен.", back_to_menu_keyboard())
+        product = next((row for row in self.inventory.products() if row.sku == sku), None)
+        if not product:
+            return HandlerResult("Товар больше не найден в остатках.", inventory_product_keyboard(page))
+        rows = self.inventory.product_clusters(sku)
+        lines = [f"<b>{html_escape(product.offer_id)}</b>", f"Всего на складах: {product.available} шт.", ""]
+        lines.extend(f"<b>{html_escape(row.cluster_name)}</b>: {row.available} шт. · продажи {row.daily_sales:.2f} шт./день" for row in rows)
+        lines.append(f"\nСредние продажи всего: {sum(row.daily_sales for row in rows):.2f} шт./день")
+        return HandlerResult("\n".join(lines), inventory_product_keyboard(page))
+
+    async def _ozon_contracts(self) -> HandlerResult:
+        if not self.ozon:
+            return HandlerResult("Подключение к Ozon API не настроено.", back_to_menu_keyboard())
+        document = await OzonContractProbe(self.ozon).capture()
+        return HandlerResult(
+            "Проверка завершена. Ответы API обезличены; ключи и реальные значения в файл не включены.",
+            back_to_menu_keyboard(),
+            document_name="ozon-contract-fixtures.json",
+            document=document,
+        )

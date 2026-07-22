@@ -20,6 +20,11 @@ class InventoryTest(unittest.TestCase):
             clusters = service.clusters()
             self.assertEqual([row.cluster_name for row in clusters], ["Москва", "Санкт-Петербург"])
             self.assertEqual(clusters[0].available, 16)
+            products = service.products()
+            self.assertEqual([(row.offer_id, row.available) for row in products], [("TEST-SKU", 16), ("TEST-SKU-2", 35)])
+            details = service.product_clusters(1001)
+            self.assertEqual(details[0].cluster_name, "Москва")
+            self.assertEqual(details[0].daily_sales, 6.0)
             self.assertFalse(service.stale())
 
     def test_production_gateway_is_fail_closed_without_fixture(self):
