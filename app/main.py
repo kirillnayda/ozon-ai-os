@@ -65,7 +65,6 @@ class Application:
         self.storage.migrate()
         bot = await self.telegram.get_me()
         logger.info("Telegram bot connected: %s", bot.get("username"))
-        await self._notify_started_version()
         await self.telegram.delete_webhook()
         self.scheduler.every(60, self._notify_started_version, "update-startup-notification")
         self.scheduler.every(300, self._recover_supply_operations, "ozon-operations")

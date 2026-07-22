@@ -28,23 +28,42 @@ class OzonContractProbe:
         self.api = api
 
     async def capture(self) -> bytes:
+        fixtures: dict[str, dict[str, Any]] = {}
+        products = await self._capture(fixtures, "products", self.api.products)
+        skus = self._product_skus(products)[:100]
         requests: dict[str, Callable[[], Awaitable[dict[str, Any]]]] = {
-            "products": self.api.products,
             "clusters": self.api.clusters,
             "warehouses": self.api.warehouses,
-            "fbo_stocks": self.api.fbo_stocks,
-            "analytics_stocks": self.api.analytics_stocks,
         }
-        fixtures: dict[str, dict[str, Any]] = {}
         for name, request in requests.items():
-            try:
-                fixtures[name] = {"status": "success", "response": sanitize_contract(await request())}
-            except Exception as exc:
-                fixtures[name] = {"status": "error", "error_type": type(exc).__name__}
-                status_code = getattr(exc, "status_code", None)
-                if isinstance(status_code, int):
-                    fixtures[name]["http_status"] = status_code
-                metadata = getattr(exc, "metadata", None)
-                if isinstance(metadata, dict):
-                    fixtures[name].update(metadata)
+            await self._capture(fixtures, name, request)
+        if skus:
+            await self._capture(fixtures, "fbo_stocks", lambda: self.api.fbo_stocks(skus))
+            await self._capture(fixtures, "analytics_stocks", lambda: self.api.analytics_stocks(skus))
+        else:
+            fixtures["fbo_stocks"] = {"status": "skipped", "reason": "products_without_sku"}
+            fixtures["analytics_stocks"] = {"status": "skipped", "reason": "products_without_sku"}
         return json.dumps(fixtures, ensure_ascii=False, indent=2).encode("utf-8")
+
+    async def _capture(self, fixtures: dict[str, dict[str, Any]], name: str, request: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any] | None:
+        try:
+            response = await request()
+            fixtures[name] = {"status": "success", "response": sanitize_contract(response)}
+            return response
+        except Exception as exc:
+            fixtures[name] = {"status": "error", "error_type": type(exc).__name__}
+            status_code = getattr(exc, "status_code", None)
+            if isinstance(status_code, int):
+                fixtures[name]["http_status"] = status_code
+            metadata = getattr(exc, "metadata", None)
+            if isinstance(metadata, dict):
+                fixtures[name].update(metadata)
+            return None
+
+    @staticmethod
+    def _product_skus(response: dict[str, Any] | None) -> list[int]:
+        result = response.get("result") if isinstance(response, dict) else None
+        items = result.get("items") if isinstance(result, dict) else None
+        if not isinstance(items, list):
+            return []
+        return [item["sku"] for item in items if isinstance(item, dict) and isinstance(item.get("sku"), int) and item["sku"] > 0]
