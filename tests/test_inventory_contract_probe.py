@@ -32,7 +32,7 @@ class InventoryContractProbeTest(unittest.TestCase):
         api = AsyncMock()
         api.clusters.side_effect = ExternalServiceError("private response", status_code=400)
         api.warehouses.side_effect = ExternalServiceError("private response", status_code=403)
-        api.fbo_stocks.side_effect = ExternalServiceError("private response", status_code=404)
+        api.fbo_stocks.side_effect = ExternalServiceError("private response", status_code=404, metadata={"field_identifiers": ["sku"]})
         api.analytics_stocks.side_effect = ExternalServiceError("private response", status_code=429)
 
         text = asyncio.run(OzonContractProbe(api).capture()).decode("utf-8")
@@ -40,6 +40,7 @@ class InventoryContractProbeTest(unittest.TestCase):
 
         self.assertEqual(data["fbo_stocks"]["http_status"], 404)
         self.assertEqual(data["analytics_stocks"]["http_status"], 429)
+        self.assertEqual(data["fbo_stocks"]["field_identifiers"], ["sku"])
         self.assertNotIn("private response", text)
 
 

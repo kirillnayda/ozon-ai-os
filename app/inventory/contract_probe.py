@@ -43,4 +43,7 @@ class OzonContractProbe:
                 status_code = getattr(exc, "status_code", None)
                 if isinstance(status_code, int):
                     fixtures[name]["http_status"] = status_code
+                metadata = getattr(exc, "metadata", None)
+                if isinstance(metadata, dict):
+                    fixtures[name].update(metadata)
         return json.dumps(fixtures, ensure_ascii=False, indent=2).encode("utf-8")

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from html import escape
 import hashlib
 import hmac
+import re
+from typing import Any
 
 from app.core.errors import ConfirmationRequired, LiveModeRequired
 
@@ -18,6 +20,30 @@ def redact(value: str, secrets: tuple[str, ...]) -> str:
         if secret:
             result = result.replace(secret, "[REDACTED]")
     return result
+
+
+def safe_error_metadata(value: Any) -> dict[str, Any]:
+    """Retain error JSON shape and field-like identifiers, never scalar values."""
+    identifiers: set[str] = set()
+
+    def sanitize(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {str(key): sanitize(child) for key, child in item.items()}
+        if isinstance(item, list):
+            return [sanitize(child) for child in item[:3]]
+        if isinstance(item, str):
+            identifiers.update(re.findall(r"\b[a-z][a-z0-9_]{1,63}\b", item))
+            return "sample"
+        if isinstance(item, bool):
+            return item
+        if isinstance(item, int):
+            return 1
+        if isinstance(item, float):
+            return 1.5
+        return item
+
+    shape = sanitize(value)
+    return {"response_shape": shape, "field_identifiers": sorted(identifiers)}
 
 
 @dataclass(frozen=True)
@@ -41,4 +67,3 @@ def idempotency_key(*parts: object) -> str:
 
 def constant_time_equal(left: str, right: str) -> bool:
     return hmac.compare_digest(left.encode(), right.encode())
-

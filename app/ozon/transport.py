@@ -8,6 +8,7 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.errors import ContractNotVerified, ExternalServiceError
+from app.core.security import safe_error_metadata
 from app.ozon.endpoints import Endpoint
 
 
@@ -64,7 +65,12 @@ class OzonHttpTransport:
                     delay = min(float(response.headers.get("Retry-After", 2 ** attempt)), 30) + random.uniform(0, 0.25)
                     await asyncio.sleep(delay)
                     continue
-            raise ExternalServiceError(f"Ozon API вернул HTTP {response.status_code}", status_code=response.status_code)
+            try:
+                error_data = response.json()
+            except ValueError:
+                error_data = None
+            metadata = safe_error_metadata(error_data) if isinstance(error_data, (dict, list)) else {}
+            raise ExternalServiceError(f"Ozon API вернул HTTP {response.status_code}", status_code=response.status_code, metadata=metadata)
         raise ExternalServiceError("Исчерпаны попытки обращения к Ozon")
 
     async def close(self) -> None:

@@ -5,9 +5,10 @@ class ConfigurationError(RuntimeError):
 class ExternalServiceError(RuntimeError):
     """Безопасная ошибка внешнего сервиса без секретов."""
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(self, message: str, *, status_code: int | None = None, metadata: dict | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.metadata = metadata or {}
 
 
 class LiveModeRequired(PermissionError):
