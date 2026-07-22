@@ -25,6 +25,7 @@ def redact(value: str, secrets: tuple[str, ...]) -> str:
 def safe_error_metadata(value: Any) -> dict[str, Any]:
     """Retain error JSON shape and field-like identifiers, never scalar values."""
     identifiers: set[str] = set()
+    numeric_constraints: set[str] = set()
 
     def sanitize(item: Any) -> Any:
         if isinstance(item, dict):
@@ -33,6 +34,7 @@ def safe_error_metadata(value: Any) -> dict[str, Any]:
             return [sanitize(child) for child in item[:3]]
         if isinstance(item, str):
             identifiers.update(re.findall(r"\b[a-z][a-z0-9_]{1,63}\b", item))
+            numeric_constraints.update(re.findall(r"(?<![A-Za-z0-9_-])\d+(?:\.\d+)?(?![A-Za-z0-9_-])", item))
             return "sample"
         if isinstance(item, bool):
             return item
@@ -43,7 +45,7 @@ def safe_error_metadata(value: Any) -> dict[str, Any]:
         return item
 
     shape = sanitize(value)
-    return {"response_shape": shape, "field_identifiers": sorted(identifiers)}
+    return {"response_shape": shape, "field_identifiers": sorted(identifiers), "numeric_constraints": sorted(numeric_constraints, key=float)}
 
 
 @dataclass(frozen=True)

@@ -25,9 +25,16 @@ CHAT_ID="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1], encoding="
 ALLOWED_CHAT_ID="$(sed -n 's/^TELEGRAM_CHAT_ID=//p' "${ENV_FILE}" | tail -n 1 | tr -d '"[:space:]')"
 [[ "${CHAT_ID}" == "${ALLOWED_CHAT_ID}" ]] || exit 77
 
-notify() {
+notify_with_retry() {
   local message="$1"
-  "${APP_DIR}/venv/bin/python" -m app.updater.notify "${CHAT_ID}" "${message}" >/dev/null 2>&1 || true
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "${APP_DIR}/venv/bin/python" -m app.updater.notify "${CHAT_ID}" "${message}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep $((attempt * 2))
+  done
+  return 1
 }
 
 repair_source_permissions() {
@@ -57,12 +64,12 @@ rollback() {
   cp "${BACKUP}/ozon_ai_os.sqlite3" "${APP_DIR}/data/ozon_ai_os.sqlite3" || true
   systemctl restart "${SERVICE}" || true
   printf 'failed %s\n' "${VERSION}" > "${STATUS_FILE}"
-  notify "❌ Обновление ${VERSION} не установлено. Выполнен автоматический откат."
+  notify_with_retry "❌ Обновление ${VERSION} не установлено. Выполнен автоматический откат." || true
 }
 trap rollback ERR
 
 printf 'installing %s\n' "${VERSION}" > "${STATUS_FILE}"
-notify "⏳ Начинаю установку ${VERSION}. Бот будет перезапущен."
+notify_with_retry "⏳ Начинаю установку ${VERSION}. Бот будет перезапущен." || true
 
 git -C "${APP_DIR}" fetch --tags --force "${REPOSITORY}"
 git -C "${APP_DIR}" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS_FILE}" verify-tag "${VERSION}"
@@ -79,5 +86,9 @@ install -o root -g root -m 0644 "${APP_DIR}/deploy/ozon-ai-os-updater.path" /etc
 systemctl daemon-reload
 rm -f -- "${REQUEST}"
 printf 'installed %s\n' "${VERSION}" > "${STATUS_FILE}"
-notify "✅ Ozon AI OS обновлён до ${VERSION}. Проверки пройдены, бот снова работает."
 trap - ERR
+if notify_with_retry "✅ Ozon AI OS обновлён до ${VERSION}. Проверки пройдены, бот снова работает."; then
+  printf 'installed %s notification_delivered\n' "${VERSION}" > "${STATUS_FILE}"
+else
+  printf 'installed %s notification_failed\n' "${VERSION}" > "${STATUS_FILE}"
+fi

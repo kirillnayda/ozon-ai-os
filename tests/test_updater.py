@@ -17,8 +17,14 @@ class UpdaterTest(unittest.TestCase):
     def test_success_notification_is_sent_after_service_health_check(self):
         updater = (Path(__file__).resolve().parents[1] / "scripts" / "ozon-ai-os-updater").read_text(encoding="utf-8")
         health_check = 'systemctl is-active --quiet "${SERVICE}"'
-        notification = 'notify "✅ Ozon AI OS обновлён до ${VERSION}. Проверки пройдены, бот снова работает."'
+        notification = 'notify_with_retry "✅ Ozon AI OS обновлён до ${VERSION}. Проверки пройдены, бот снова работает."'
         self.assertLess(updater.index(health_check), updater.index(notification))
+
+    def test_notification_retries_and_records_delivery(self):
+        updater = (Path(__file__).resolve().parents[1] / "scripts" / "ozon-ai-os-updater").read_text(encoding="utf-8")
+        self.assertIn("for attempt in 1 2 3 4 5", updater)
+        self.assertIn("notification_delivered", updater)
+        self.assertIn("notification_failed", updater)
 
     def test_version_parser(self):
         self.assertGreater(GitHubReleaseChecker._tuple("v1.2.0"), GitHubReleaseChecker._tuple("1.1.9"))
