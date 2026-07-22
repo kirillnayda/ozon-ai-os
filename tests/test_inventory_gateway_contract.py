@@ -38,3 +38,27 @@ class InventoryGatewayContractTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "Неполный DTO"):
             asyncio.run(gateway.stock_snapshots())
+
+    def test_null_cluster_sales_means_zero_demand(self):
+        gateway = OzonAnalyticsInventoryGateway(OzonReadApi(MockTransport({
+            PRODUCT_LIST.path: [{"result": {"items": [{"sku": 101, "has_fbo_stocks": True}], "last_id": ""}}],
+            ANALYTICS_STOCKS.path: [{"items": [
+                {"sku": 101, "offer_id": "A-101", "warehouse_id": 11, "warehouse_name": "Склад", "cluster_id": 7, "cluster_name": "Москва", "available_stock_count": 12, "ads_cluster": None},
+            ]}],
+        })))
+
+        asyncio.run(gateway.stock_snapshots())
+        demand = asyncio.run(gateway.demand_snapshots())
+
+        self.assertEqual(demand[0].units, 0)
+
+    def test_invalid_identifier_reports_field_without_value(self):
+        gateway = OzonAnalyticsInventoryGateway(OzonReadApi(MockTransport({
+            PRODUCT_LIST.path: [{"result": {"items": [{"sku": 101, "has_fbo_stocks": True}], "last_id": ""}}],
+            ANALYTICS_STOCKS.path: [{"items": [
+                {"sku": 101, "offer_id": "A-101", "warehouse_id": None, "warehouse_name": "Склад", "cluster_id": 7, "cluster_name": "Москва", "available_stock_count": 12, "ads_cluster": 1.0},
+            ]}],
+        })))
+
+        with self.assertRaisesRegex(RuntimeError, "warehouse_id"):
+            asyncio.run(gateway.stock_snapshots())

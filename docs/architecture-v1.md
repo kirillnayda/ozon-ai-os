@@ -70,6 +70,8 @@ Fixture `/v3/product/list` от 22 июля 2026 года подтвердила
 
 Успешная fixture `/v1/analytics/stocks` от 22 июля 2026 года подтвердила request `{skus: int[]}` (1–100) и поля `sku`, `offer_id`, `warehouse_id`, `warehouse_name`, `cluster_id`, `cluster_name`, `available_stock_count`, `ads_cluster`. `OzonAnalyticsInventoryGateway` использует этот read-only контракт; `ads_cluster` дедуплицируется по `(sku, cluster_id)`. Неполный или изменившийся DTO блокируется contract validation без частичного сохранения снимков.
 
+Реальная синхронизация 22 июля 2026 года подтвердила nullable-вариант `ads_cluster` для позиций без рассчитанного спроса; адаптер нормализует его в `0.0`. Остальные обязательные поля проверяются отдельно, а безопасная ошибка сообщает только имя несовпавшего поля.
+
 ## Хранилище
 
 SQLite работает в WAL mode с busy timeout. Repository protocols не зависят от SQLite и допускают PostgreSQL adapter. Секреты не хранянятся. Audit log отделён от operational state.

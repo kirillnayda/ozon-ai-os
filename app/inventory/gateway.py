@@ -100,17 +100,43 @@ class OzonAnalyticsInventoryGateway:
         required = ("sku", "offer_id", "warehouse_id", "warehouse_name", "cluster_id", "cluster_name", "available_stock_count", "ads_cluster")
         if any(key not in item for key in required):
             raise ContractNotVerified("Неполный DTO /v1/analytics/stocks")
-        try:
-            sku = int(item["sku"])
-            offer_id = str(item["offer_id"])
-            warehouse_id = int(item["warehouse_id"])
-            warehouse_name = str(item["warehouse_name"])
-            cluster_id = int(item["cluster_id"])
-            cluster_name = str(item["cluster_name"])
-            available = max(0, int(item["available_stock_count"]))
-            daily = max(0.0, float(item["ads_cluster"]))
-        except (TypeError, ValueError) as exc:
-            raise ContractNotVerified("Некорректные типы DTO /v1/analytics/stocks") from exc
+        sku = self._integer(item, "sku")
+        offer_id = self._text(item, "offer_id")
+        warehouse_id = self._integer(item, "warehouse_id")
+        warehouse_name = self._text(item, "warehouse_name")
+        cluster_id = self._integer(item, "cluster_id")
+        cluster_name = self._text(item, "cluster_name")
+        available = max(0, self._integer(item, "available_stock_count"))
+        daily = self._nullable_number(item, "ads_cluster")
         stock = StockSnapshot(captured_at, sku, offer_id, cluster_id, cluster_name, warehouse_id, warehouse_name, available, 0)
         demand = DemandSnapshot(captured_at, sku, offer_id, cluster_id, round(daily * self.DEMAND_PRECISION), self.DEMAND_PRECISION)
         return stock, demand
+
+    @staticmethod
+    def _integer(item: dict, field: str) -> int:
+        value = item[field]
+        if isinstance(value, bool):
+            raise ContractNotVerified(f"Некорректный тип поля {field} в /v1/analytics/stocks")
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ContractNotVerified(f"Некорректный тип поля {field} в /v1/analytics/stocks") from exc
+
+    @staticmethod
+    def _text(item: dict, field: str) -> str:
+        value = item[field]
+        if not isinstance(value, str):
+            raise ContractNotVerified(f"Некорректный тип поля {field} в /v1/analytics/stocks")
+        return value
+
+    @staticmethod
+    def _nullable_number(item: dict, field: str) -> float:
+        value = item[field]
+        if value is None:
+            return 0.0
+        if isinstance(value, bool):
+            raise ContractNotVerified(f"Некорректный тип поля {field} в /v1/analytics/stocks")
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError) as exc:
+            raise ContractNotVerified(f"Некорректный тип поля {field} в /v1/analytics/stocks") from exc
