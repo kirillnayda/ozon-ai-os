@@ -58,13 +58,13 @@ class OzonHttpTransport:
             if response.status_code < 400:
                 return response
             if response.status_code in {401, 403}:
-                raise ExternalServiceError("Ozon отклонил авторизацию")
+                raise ExternalServiceError("Ozon отклонил авторизацию", status_code=response.status_code)
             if response.status_code in {409, 429} or response.status_code >= 500:
                 if attempt < self._retries:
                     delay = min(float(response.headers.get("Retry-After", 2 ** attempt)), 30) + random.uniform(0, 0.25)
                     await asyncio.sleep(delay)
                     continue
-            raise ExternalServiceError(f"Ozon API вернул HTTP {response.status_code}")
+            raise ExternalServiceError(f"Ozon API вернул HTTP {response.status_code}", status_code=response.status_code)
         raise ExternalServiceError("Исчерпаны попытки обращения к Ozon")
 
     async def close(self) -> None:

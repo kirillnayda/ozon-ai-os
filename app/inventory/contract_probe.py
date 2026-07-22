@@ -40,4 +40,7 @@ class OzonContractProbe:
                 fixtures[name] = {"status": "success", "response": sanitize_contract(await request())}
             except Exception as exc:
                 fixtures[name] = {"status": "error", "error_type": type(exc).__name__}
+                status_code = getattr(exc, "status_code", None)
+                if isinstance(status_code, int):
+                    fixtures[name]["http_status"] = status_code
         return json.dumps(fixtures, ensure_ascii=False, indent=2).encode("utf-8")

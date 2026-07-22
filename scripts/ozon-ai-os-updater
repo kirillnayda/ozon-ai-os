@@ -6,6 +6,7 @@ APP_DIR=/opt/ozon-ai-os
 REQUEST_DIR=/run/ozon-ai-os/update-requests
 BACKUP_DIR=/var/backups/ozon-ai-os
 SERVICE=ozon-ai-os.service
+APP_USER=ozonai
 REPOSITORY_FILE=/etc/ozon-ai-os/repository
 ALLOWED_SIGNERS_FILE=/etc/ozon-ai-os/allowed_signers
 ENV_FILE="${APP_DIR}/.env"
@@ -29,6 +30,18 @@ notify() {
   "${APP_DIR}/venv/bin/python" -m app.updater.notify "${CHAT_ID}" "${message}" >/dev/null 2>&1 || true
 }
 
+repair_source_permissions() {
+  while IFS= read -r -d '' path; do
+    chown root:"${APP_USER}" "${APP_DIR}/${path}"
+    chmod g+rX "${APP_DIR}/${path}"
+  done < <(git -C "${APP_DIR}" ls-files -z)
+  for directory in app deploy docs scripts tests .github; do
+    if [[ -d "${APP_DIR}/${directory}" ]]; then
+      find "${APP_DIR}/${directory}" -type d -exec chown root:"${APP_USER}" {} + -exec chmod 0750 {} +
+    fi
+  done
+}
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="${BACKUP_DIR}/${STAMP}"
 PREVIOUS="$(git -C "${APP_DIR}" rev-parse HEAD)"
@@ -39,6 +52,7 @@ git -C "${APP_DIR}" bundle create "${BACKUP}/source.bundle" HEAD
 
 rollback() {
   git -C "${APP_DIR}" reset --hard "${PREVIOUS}" || true
+  repair_source_permissions || true
   cp "${BACKUP}/.env" "${ENV_FILE}" || true
   cp "${BACKUP}/ozon_ai_os.sqlite3" "${APP_DIR}/data/ozon_ai_os.sqlite3" || true
   systemctl restart "${SERVICE}" || true
@@ -53,6 +67,7 @@ notify "⏳ Начинаю установку ${VERSION}. Бот будет пе
 git -C "${APP_DIR}" fetch --tags --force "${REPOSITORY}"
 git -C "${APP_DIR}" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS_FILE}" verify-tag "${VERSION}"
 git -C "${APP_DIR}" checkout --detach "${VERSION}"
+repair_source_permissions
 sed -i "s/^CURRENT_VERSION=.*/CURRENT_VERSION=${VERSION#v}/" "${ENV_FILE}"
 "${APP_DIR}/venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
 "${APP_DIR}/venv/bin/python" "${APP_DIR}/scripts/check.py"
@@ -64,5 +79,5 @@ install -o root -g root -m 0644 "${APP_DIR}/deploy/ozon-ai-os-updater.path" /etc
 systemctl daemon-reload
 rm -f -- "${REQUEST}"
 printf 'installed %s\n' "${VERSION}" > "${STATUS_FILE}"
-notify "✅ Обновление ${VERSION} установлено, проверки пройдены."
+notify "✅ Ozon AI OS обновлён до ${VERSION}. Проверки пройдены, бот снова работает."
 trap - ERR
