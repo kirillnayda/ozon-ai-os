@@ -8,6 +8,7 @@ from app.config import Settings
 from app.inventory.service import InventoryService
 from app.inventory.contract_probe import OzonContractProbe
 from app.core.security import html_escape
+from app.core.errors import ContractNotVerified
 from app.ozon.read_api import OzonReadApi
 from app.storage.models import OperationState
 from app.storage.repositories import OperationRepository
@@ -120,6 +121,8 @@ class CommandHandlers:
                 return HandlerResult("Сервис остатков не настроен.")
             try:
                 stocks, demand = await self.inventory.sync(str(chat_id))
+            except ContractNotVerified as exc:
+                return HandlerResult(f"Синхронизация заблокирована проверкой контракта: {html_escape(exc)}. Внешний ответ не сохранён.")
             except Exception as exc:
                 return HandlerResult(f"Синхронизация заблокирована ({html_escape(type(exc).__name__)}). Внешний ответ не сохранён.")
             return HandlerResult(f"Остатки синхронизированы: {stocks}; срезов спроса: {demand}.")

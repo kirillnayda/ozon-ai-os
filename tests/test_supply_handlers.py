@@ -13,9 +13,26 @@ from app.supply.service import SupplyManager
 from app.telegram.handlers import CommandHandlers
 from app.inventory.gateway import MockInventoryGateway
 from app.inventory.service import InventoryService
+from app.core.errors import ContractNotVerified
+from unittest.mock import AsyncMock
 
 
 class SupplyHandlersTest(unittest.TestCase):
+    def test_stock_sync_shows_safe_contract_reason(self):
+        with TemporaryDirectory() as directory:
+            storage = SQLiteStorage(Path(directory) / "test.sqlite3")
+            storage.migrate()
+            workflow = SupplyWorkflow(SupplyTestTransport(), storage, storage, WritePolicy(False, 42), test_mode=True)
+            dialogs = SupplyDialogService(storage, SnapshotProductCatalog(storage, ("TEST-SKU",)), workflow, True)
+            settings = Settings("token", 42, "client", "key", 9, "UTC", False, "test", 7, 30, 45, 7, 6, "", "1.0.0", 60)
+            inventory = AsyncMock()
+            inventory.sync.side_effect = ContractNotVerified("Неполный DTO /v1/analytics/stocks")
+            handlers = CommandHandlers(settings, None, SupplyManager(storage), workflow, dialogs, storage, None, None, inventory)
+
+            result = asyncio.run(handlers.message(42, "/stocks_sync"))
+
+            self.assertIn("Неполный DTO /v1/analytics/stocks", result.text)
+            self.assertIn("Внешний ответ не сохранён", result.text)
     def test_inventory_product_navigation_and_cluster_sales(self):
         with TemporaryDirectory() as directory:
             storage = SQLiteStorage(Path(directory) / "test.sqlite3")
