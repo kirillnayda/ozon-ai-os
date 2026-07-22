@@ -62,7 +62,9 @@ Ozon параллельно развивает FBP API `/v1/fbp/*`. Перехо
 
 Повторная проверка 14 июля 2026 года: публичная страница [Ozon Seller API](https://docs.ozon.ru/api/seller/) не отдала статические request/response DTO без авторизованного кабинета. Поэтому `UnverifiedOzonInventoryGateway` и production planning gateway намеренно возвращают `ContractNotVerified`; mock gateway и contract-тесты покрывают внутренний нормализованный формат.
 
-Contract probe кабинета от 22 июля 2026 года подтвердил validation-ограничения: `/v1/analytics/stocks` принимает `limit` от 1 до 100, а `/v1/product/info/stocks-by-warehouse/fbo` требует от 1 до 1000 SKU. До получения успешной обезличенной response fixture production-import остаётся fail-closed.
+Contract probe кабинета от 22 июля 2026 года подтвердил validation-ограничения: `/v1/analytics/stocks` требует массив от 1 до 100 элементов, а `/v1/product/info/stocks-by-warehouse/fbo` — от 1 до 1000 элементов. До получения успешной обезличенной response fixture production-import остаётся fail-closed.
+
+Повторная fixture показала, что `1…100` для `/v1/analytics/stocks` относится к обязательному массиву элементов, а не к `limit`: запрос с `limit=100` также возвращает HTTP 400. Для подтверждения источника SKU contract probe дополнительно снимает схему уже зарегистрированного `POST /v3/product/list`.
 
 ## Хранилище
 

@@ -29,6 +29,7 @@ class OzonContractProbe:
 
     async def capture(self) -> bytes:
         requests: dict[str, Callable[[], Awaitable[dict[str, Any]]]] = {
+            "products": self.api.products,
             "clusters": self.api.clusters,
             "warehouses": self.api.warehouses,
             "fbo_stocks": self.api.fbo_stocks,

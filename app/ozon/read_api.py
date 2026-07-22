@@ -11,9 +11,12 @@ class OzonReadApi:
         self.transport = transport
 
     async def test_connection(self) -> dict[str, Any]:
-        data = await self.transport.request(endpoints.PRODUCT_LIST, {"filter": {"visibility": "ALL"}, "last_id": "", "limit": 1})
+        data = await self.products(limit=1)
         result = data.get("result") or {}
         return {"connected": True, "items_received": len(result.get("items") or []), "total": result.get("total")}
+
+    async def products(self, limit: int = 100, last_id: str = "") -> dict[str, Any]:
+        return await self.transport.request(endpoints.PRODUCT_LIST, {"filter": {"visibility": "ALL"}, "last_id": last_id, "limit": limit})
 
     async def clusters(self) -> dict[str, Any]:
         return await self.transport.request(endpoints.CLUSTERS, {})
