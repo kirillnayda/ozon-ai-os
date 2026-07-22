@@ -28,6 +28,7 @@ from app.telegram.client import TelegramClient
 from app.telegram.handlers import CommandHandlers
 from app.updater.checker import GitHubReleaseChecker
 from app.updater.request import UpdateRequestWriter
+from app.updater.startup_notify import StartupUpdateNotifier
 
 logger = logging.getLogger("ozon-ai-os")
 
@@ -52,6 +53,7 @@ class Application:
         developer_db = configured_developer_db if configured_developer_db.parent.exists() else DB_PATH.with_name("developer_tasks.sqlite3")
         self.developer_repository = SQLiteDeveloperTaskRepository(developer_db)
         self.developer_handlers = DeveloperAgentTelegramHandlers(self.developer_repository, self.settings.telegram_chat_id, int(os.getenv("DEVELOPER_AGENT_MAX_ATTEMPTS", "2")))
+        self.startup_notifier = StartupUpdateNotifier(self.telegram, self.settings.telegram_chat_id, self.settings.current_version, DB_PATH.with_name("update-notified-version"))
         self.workflow = workflow
         self.scheduler = Scheduler()
         self.running = True
@@ -63,7 +65,9 @@ class Application:
         self.storage.migrate()
         bot = await self.telegram.get_me()
         logger.info("Telegram bot connected: %s", bot.get("username"))
+        await self._notify_started_version()
         await self.telegram.delete_webhook()
+        self.scheduler.every(60, self._notify_started_version, "update-startup-notification")
         self.scheduler.every(300, self._recover_supply_operations, "ozon-operations")
         self.scheduler.every(60, self._deliver_pdf_outbox, "supply-pdf-outbox")
         if not self.settings.live_mode:
@@ -122,6 +126,12 @@ class Application:
             result = await self.handlers.message(self.settings.telegram_chat_id, "/check_update")
             if result:
                 await self.telegram.send_message(self.settings.telegram_chat_id, result.text, result.keyboard)
+
+    async def _notify_started_version(self) -> None:
+        try:
+            await self.startup_notifier.notify_once()
+        except Exception as exc:
+            logger.warning("Update startup notification failed: %s", type(exc).__name__)
 
     async def _recover_supply_operations(self) -> None:
         for chat_id, operation_id, pdf in await self.workflow.poll_unfinished():

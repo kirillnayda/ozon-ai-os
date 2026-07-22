@@ -27,6 +27,5 @@ class OzonReadApi:
             payload["skus"] = skus
         return await self.transport.request(endpoints.FBO_STOCKS, payload)
 
-    async def analytics_stocks(self, limit: int = 1000, offset: int = 0) -> dict[str, Any]:
+    async def analytics_stocks(self, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         return await self.transport.request(endpoints.ANALYTICS_STOCKS, {"limit": limit, "offset": offset})
-

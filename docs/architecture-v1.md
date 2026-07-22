@@ -62,6 +62,8 @@ Ozon параллельно развивает FBP API `/v1/fbp/*`. Перехо
 
 Повторная проверка 14 июля 2026 года: публичная страница [Ozon Seller API](https://docs.ozon.ru/api/seller/) не отдала статические request/response DTO без авторизованного кабинета. Поэтому `UnverifiedOzonInventoryGateway` и production planning gateway намеренно возвращают `ContractNotVerified`; mock gateway и contract-тесты покрывают внутренний нормализованный формат.
 
+Contract probe кабинета от 22 июля 2026 года подтвердил validation-ограничения: `/v1/analytics/stocks` принимает `limit` от 1 до 100, а `/v1/product/info/stocks-by-warehouse/fbo` требует от 1 до 1000 SKU. До получения успешной обезличенной response fixture production-import остаётся fail-closed.
+
 ## Хранилище
 
 SQLite работает в WAL mode с busy timeout. Repository protocols не зависят от SQLite и допускают PostgreSQL adapter. Секреты не хранянятся. Audit log отделён от operational state.

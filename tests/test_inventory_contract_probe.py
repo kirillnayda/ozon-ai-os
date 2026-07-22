@@ -27,6 +27,8 @@ class InventoryContractProbeTest(unittest.TestCase):
         self.assertEqual(data["fbo_stocks"]["response"]["items"][0]["sku"], 1)
         self.assertNotIn("SECRET-SKU", text)
         self.assertNotIn("Москва", text)
+        analytics_call = next(payload for path, payload in transport.calls if path == ANALYTICS_STOCKS.path)
+        self.assertEqual(analytics_call, {"limit": 100, "offset": 0})
 
     def test_capture_includes_safe_http_status_without_error_body(self):
         api = AsyncMock()
